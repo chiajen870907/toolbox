@@ -1,5 +1,5 @@
 (async () => {
-  const PAGE_URL = 'https://cdn.jsdelivr.net/gh/chiajen870907/toolbox@main/web/toolbox.html';
+  const PAGE_URL = 'https://raw.githubusercontent.com/chiajen870907/toolbox/main/web/toolbox.html';
   const platform = typeof $prefs !== 'undefined' ? 'qx' : 'surge';
   const storage = platform === 'qx' ? $prefs : {
     valueForKey: key => $persistentStore.read(key),
@@ -18,7 +18,7 @@
     });
   }
   async function loadPage() {
-    const key = 'qx_panel_web_v1';
+    const key = 'qx_panel_web_v2';
     const cached = storage.valueForKey(key);
     try {
       const response = await fetchResource(PAGE_URL);

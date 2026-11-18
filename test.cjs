@@ -14,7 +14,8 @@ async function verify(qx) {
   const appScript = 'document.querySelector("main").textContent = window.toolboxData[0].name;';
   const bodyFor = url => {
     if (url.endsWith('/app.js')) return appScript;
-    return url.includes('raw.githubusercontent.com') ? JSON.stringify(manifest) : html;
+    if (url.endsWith('/web/toolbox.html')) return html;
+    return JSON.stringify(manifest);
   };
   async function request(path, data) {
     let result;

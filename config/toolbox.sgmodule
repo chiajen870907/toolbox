@@ -5,7 +5,7 @@
 force-http-engine-hosts = %APPEND% toolbox.com
 
 [Script]
-Toolbox = type=http-request,pattern=^https://toolbox[.]com(?:/.*)?$,script-path=https://cdn.jsdelivr.net/gh/chiajen870907/toolbox@main/toolbox.js,requires-body=true,timeout=20
+Toolbox = type=http-request,pattern=^https://toolbox[.]com(?:/.*)?$,script-path=https://raw.githubusercontent.com/chiajen870907/toolbox/main/toolbox.js,requires-body=true,timeout=20
 
 [MITM]
 hostname = %APPEND% toolbox.com
