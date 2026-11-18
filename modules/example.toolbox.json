@@ -1,0 +1,45 @@
+{
+  "id": "example.package",
+  "name": "範例工具包",
+  "apps": [
+    {
+      "id": "example.checkin",
+      "name": "簽到範例",
+      "description": "示範匯入其他工具。請搭配讀取相同設定鍵的 QX 腳本。",
+      "settings": [
+        {
+          "id": "example_checkin_enabled",
+          "name": "啟用簽到",
+          "type": "boolean",
+          "val": true
+        },
+        {
+          "id": "example_checkin_unlimited",
+          "name": "次數無上限",
+          "type": "boolean",
+          "val": false
+        },
+        {
+          "id": "example_checkin_count",
+          "name": "執行次數",
+          "type": "number",
+          "val": 3,
+          "min": 1,
+          "max": 100,
+          "integer": true,
+          "showWhen": {
+            "id": "example_checkin_unlimited",
+            "value": false
+          }
+        },
+        {
+          "id": "example_checkin_token",
+          "name": "登入憑證",
+          "type": "text",
+          "val": "",
+          "sensitive": true
+        }
+      ]
+    }
+  ]
+}

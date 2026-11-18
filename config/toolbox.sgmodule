@@ -1,0 +1,11 @@
+#!name=Toolbox
+#!desc=本機腳本設定管理
+
+[General]
+force-http-engine-hosts = %APPEND% toolbox.test
+
+[Script]
+Toolbox = type=http-request,pattern=^https?://toolbox[.]test(?:/.*)?$,script-path=https://cdn.jsdelivr.net/gh/chiajen870907/toolbox@main/toolbox.js,requires-body=true,timeout=20
+
+[MITM]
+hostname = %APPEND% toolbox.test
