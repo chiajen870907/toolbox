@@ -9,20 +9,23 @@ async function verify(qx) {
   const store = new Map();
   const write = (value, key) => (store.set(key, value), true);
   let offline = false;
+  const url = 'https://raw.githubusercontent.com/example/toolbox/main/module.json';
+  let manifest = {id:'remote',name:'Remote',settings:[{id:'remote_demo',type:'text',val:'default'}]};
+  const bodyFor = url => url.includes('raw.githubusercontent.com') ? JSON.stringify(manifest) : html;
   async function request(path, data) {
     let result;
     const context = {
-      $request: {url: 'https://toolbox.test' + path, method: data ? 'POST' : 'GET',
+      $request: {url: 'https://toolbox.com' + path, method: data ? 'POST' : 'GET',
         headers: {'Content-Type':'application/json','X-Panel-Token':store.get('qx_panel_token')},
         body: data ? JSON.stringify(data) : undefined},
       $done: value => result = value.response || value
     };
     if (qx) {
       context.$prefs = {valueForKey:k=>store.get(k),setValueForKey:write,removeValueForKey:k=>store.delete(k)};
-      context.$task = {fetch: async () => {if (offline) throw Error(); return {statusCode:200, body:html}}};
+      context.$task = {fetch: async ({url}) => {if (offline) throw Error(); return {statusCode:200, body:bodyFor(url)}}};
     } else {
       context.$persistentStore = {read:k=>store.get(k),write};
-      context.$httpClient = {get: (_,cb)=>cb(offline ? Error() : null,{status:200},html)};
+      context.$httpClient = {get: ({url},cb)=>cb(offline ? Error() : null,{status:200},bodyFor(url))};
     }
     await vm.runInNewContext(code, context);
     return result.body;
@@ -30,10 +33,26 @@ async function verify(qx) {
   assert.match(await request('/'), /<title>Toolbox<\/title>/);
   offline = true;
   assert.match(await request('/'), /<title>Toolbox<\/title>/);
+  offline = false;
   const app = {id:'example',name:'Example',settings:[{id:'demo',type:'text',val:'default'}]};
   assert(JSON.parse(await request('/api/modules/import',app)).ok);
   assert(JSON.parse(await request('/api/settings',{appId:'example',values:{demo:'saved'}})).ok);
   assert.equal(JSON.parse(await request('/api/state')).data.apps[0].settings[0].value,'saved');
+  const api = async (path, input) => JSON.parse(await request('/api/subscriptions/' + path, input));
+  assert.equal((await api('preview', {url:'https://toolbox.com/module.json'})).ok, false);
+  const preview = await api('preview', {url});
+  assert.equal(preview.data.apps[0].id, 'remote');
+  assert.equal((await api('add', {url, revision:'wrong'})).ok, false);
+  assert((await api('add', {url, revision:preview.data.revision})).ok);
+  assert(JSON.parse(await request('/api/settings',{appId:'remote',values:{remote_demo:'saved'}})).ok);
+  assert((await api('toggle', {id:url, enabled:false})).data.apps.find(a => a.id === 'remote').disabled);
+  manifest = {};
+  assert.equal((await api('refresh', {id:url})).ok, false);
+  manifest = {id:'remote',name:'Updated',settings:[{id:'remote_demo',type:'text',val:'default'}]};
+  const refreshed = (await api('refresh', {id:url})).data.apps.find(a => a.id === 'remote');
+  assert.equal(refreshed.name, 'Updated');
+  assert.equal(refreshed.settings[0].value, 'saved');
+  assert.equal((await api('remove', {id:url})).data.apps.length, 1);
 }
 
 Promise.all([verify(true),verify(false)]).then(()=>console.log('QX and Surge-style runtime checks passed')).catch(e=>{console.error(e);process.exitCode=1});

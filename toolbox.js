@@ -6,18 +6,22 @@
     setValueForKey: (value, key) => $persistentStore.write(value, key),
     removeValueForKey: key => $persistentStore.write(null, key)
   };
+  async function fetchResource(url) {
+    if (platform === 'qx') {
+      return $task.fetch({url, method: 'GET', opts: {timeout: 8, redirection: false}});
+    }
+    return new Promise((resolve, reject) => {
+      $httpClient.get({url, timeout: 8, 'auto-redirect': false}, (error, response, body) => {
+        if (error) reject(error);
+        else resolve({statusCode: response.status, body});
+      });
+    });
+  }
   async function loadPage() {
     const key = 'qx_panel_web_v1';
     const cached = storage.valueForKey(key);
     try {
-      const response = platform === 'qx'
-        ? await $task.fetch({url: PAGE_URL, method: 'GET', opts: {timeout: 8}})
-        : await new Promise((resolve, reject) => {
-            $httpClient.get({url: PAGE_URL, timeout: 8}, (error, response, body) => {
-              if (error) reject(error);
-              else resolve({statusCode: response.status, body});
-            });
-          });
+      const response = await fetchResource(PAGE_URL);
       const html = response.body;
       if (Number(response.statusCode) !== 200 || typeof html !== 'string' ||
           html.length > 524288 || !html.includes('<title>Toolbox</title>') ||
@@ -82,7 +86,97 @@
     const out=apps.map(a=>normalizeApp(a,input.id||a.id,input.name||a.name));
     if(new Set(out.map(a=>a.id)).size!==out.length)throw Error('檔案內有重複工具。');return out;
   }
-  const modules=()=>{const v=read(REG,[]);return Array.isArray(v)?v:[]};
+  function registry() {
+    const stored = read(REG, []);
+    if (Array.isArray(stored)) return {apps: stored, subscriptions: []};
+    if (Array.isArray(stored.apps) && Array.isArray(stored.subscriptions)) return stored;
+    return {apps: [], subscriptions: []};
+  }
+  const modules = () => registry().apps;
+  function saveRegistry(next) {
+    write(REG, JSON.stringify(next));
+  }
+  function mergeApps(current, imported, removedIds = []) {
+    const remaining = current.filter(app =>
+      !removedIds.includes(app.id) && !imported.some(next => next.id === app.id));
+    if (remaining.length + imported.length > 40) throw Error('最多可加入 40 個工具。');
+    return [...remaining, ...imported];
+  }
+  async function loadSubscription(url) {
+    if (typeof url !== 'string' || url.length > 2048 ||
+        !/^https:\/\/(?:raw\.githubusercontent\.com|cdn\.jsdelivr\.net)\/[a-z0-9_./@%+-]+\.json$/i.test(url)) {
+      throw Error('請使用 GitHub Raw 或 jsDelivr 的 HTTPS JSON 連結。');
+    }
+    let response;
+    try {
+      response = await fetchResource(url);
+    } catch (_) {
+      throw Error('無法連到訂閱來源，請稍後重試。');
+    }
+    if (Number(response.statusCode) !== 200 || typeof response.body !== 'string' ||
+        response.body.length > 524288) throw Error('訂閱無法讀取或大於 512 KB。');
+    let manifest;
+    try {
+      manifest = JSON.parse(response.body);
+    } catch (_) {
+      throw Error('訂閱設定檔格式不正確。');
+    }
+    const apps = normalize(manifest);
+    return {url, name: text(manifest.name, 100) || apps[0].name, apps};
+  }
+  function saveSubscription(current, source, previous) {
+    const appIds = source.apps.map(app => app.id);
+    const owned = current.subscriptions.filter(sub => sub.id !== previous?.id).flatMap(sub => sub.appIds);
+    if (appIds.some(id => owned.includes(id))) throw Error('應用已由其他訂閱來源管理。');
+    const subscription = {
+      id: source.url, url: source.url, name: source.name, appIds,
+      enabled: previous?.enabled ?? true, updatedAt: Date.now()
+    };
+    saveRegistry({
+      apps: mergeApps(current.apps, source.apps, previous?.appIds),
+      subscriptions: [...current.subscriptions.filter(sub => sub.id !== subscription.id), subscription]
+    });
+  }
+  async function subscriptionAction(action, input) {
+    const previewKey = 'qx_panel_subscription_preview';
+    if (action === 'preview') {
+      const source = await loadSubscription(input.url);
+      const revision = Date.now().toString(36) + Math.random().toString(36).slice(2);
+      write(previewKey, JSON.stringify({source, revision, expires: Date.now() + 600000}));
+      return {...source, revision, apps: source.apps.map(app => ({
+        id: app.id, name: app.name, fields: app.settings.length
+      }))};
+    }
+    const current = registry();
+    const sub = current.subscriptions.find(item => item.id === (input.id || input.url));
+    if (action === 'add') {
+      const preview = read(previewKey, {});
+      if (preview.revision !== input.revision || preview.source?.url !== input.url ||
+          preview.expires < Date.now()) throw Error('預覽已失效，請重新載入訂閱。');
+      saveSubscription(current, preview.source, sub);
+      storage.removeValueForKey(previewKey);
+    } else {
+      if (!sub) throw Error('找不到訂閱來源。');
+      if (action === 'refresh') {
+        const source = await loadSubscription(sub.url);
+        const latest = registry();
+        const existing = latest.subscriptions.find(item => item.id === sub.id);
+        if (JSON.stringify(existing) !== JSON.stringify(sub)) {
+          throw Error('訂閱已變更，請重新整理後再試。');
+        }
+        saveSubscription(latest, source, existing);
+      } else if (action === 'toggle') {
+        sub.enabled = input.enabled === true;
+        saveRegistry(current);
+      } else if (action === 'remove') {
+        saveRegistry({
+          apps: current.apps.filter(app => !sub.appIds.includes(app.id)),
+          subscriptions: current.subscriptions.filter(item => item.id !== sub.id)
+        });
+      } else throw Error('無法完成此操作。');
+    }
+    return state();
+  }
   function appById(id){const app=modules().find(a=>a.id===id);if(!app)throw Error('找不到這個工具，請重新整理。');return app}
   function commit(entries){const old=entries.map(([k])=>[k,storage.valueForKey(k)]);try{for(const [k,v] of entries)write(k,v)}catch(error){for(const [k,v] of old){if(v==null)storage.removeValueForKey(k);else storage.setValueForKey(v,k)}throw error}}
   function valueEntries(app,input,includeSecrets=true,changes=new Map()){
@@ -92,16 +186,42 @@
     return [...changes];
   }
   function publicApp(app){const current=values(app);return {...app,settings:app.settings.map(f=>({...f,value:secret(f)?'':current[f.id],sensitive:secret(f),hasSavedValue:secret(f)&&!!preference(f.id)}))}}
-  const state=()=>({apps:modules().map(publicApp),version:'1.0'});
+  function state() {
+    const current = registry();
+    const disabled = current.subscriptions.filter(sub => !sub.enabled).flatMap(sub => sub.appIds);
+    return {
+      apps: current.apps.map(app => ({...publicApp(app), disabled: disabled.includes(app.id)})),
+      subscriptions: current.subscriptions,
+      version: '1.0'
+    };
+  }
   try{
-    const match=$request.url.match(/^(https?:\/\/[^/]+)(\/[^?#]*)?(?:\?([^#]*))?/);if(!match)throw Error('無法開啟此頁面。');const origin=match[1],path=match[2]||'/',query={};for(const part of(match[3]||'').split('&')){const i=part.indexOf('=');if(i>=0)query[decodeURIComponent(part.slice(0,i))]=decodeURIComponent(part.slice(i+1))}const method=String($request.method||'GET').toUpperCase();
+    const match=$request.url.match(/^(https?:\/\/[^/]+)(\/[^?#]*)?(?:\?([^#]*))?/);if(!match||match[1]!=='https://toolbox.com')throw Error('無法開啟此頁面。');const origin=match[1],path=match[2]||'/',query={};for(const part of(match[3]||'').split('&')){const i=part.indexOf('=');if(i>=0)query[decodeURIComponent(part.slice(0,i))]=decodeURIComponent(part.slice(i+1))}const method=String($request.method||'GET').toUpperCase();
     let token=storage.valueForKey('qx_panel_token');if(!token){token=Array.from({length:5},()=>Math.random().toString(36).slice(2)).join('');write('qx_panel_token',token)}
     if(method==='GET'&&path==='/api/state')return ok(state());
     if(method==='POST'&&path.startsWith('/api/')){
       const headers={};for(const k of Object.keys($request.headers||{}))headers[k.toLowerCase()]=$request.headers[k];if(headers['x-panel-token']!==token||(headers.origin&&headers.origin!==origin)||!/^application\/json\b/i.test(headers['content-type']||''))throw Error('頁面已過期，請重新整理。');if(typeof $request.body!=='string'||$request.body.length>524288)throw Error('檔案內容太大或格式不正確。');let input;try{input=JSON.parse($request.body)}catch(_){throw Error('請選擇有效的 JSON 檔案。')}
       if(path==='/api/modules/preview')return ok(normalize(input).map(a=>({id:a.id,name:a.name,fields:a.settings.length,replacing:modules().some(x=>x.id===a.id)})));
-      if(path==='/api/modules/import'){const imported=normalize(input),list=modules().filter(a=>!imported.some(x=>x.id===a.id));if(list.length+imported.length>40)throw Error('最多可加入 40 個工具。');write(REG,JSON.stringify([...list,...imported]));return ok(state())}
-      if(path==='/api/modules/remove'){appById(input.id);write(REG,JSON.stringify(modules().filter(a=>a.id!==input.id)));return ok(state())}
+      if (path.startsWith('/api/subscriptions/')) {
+        return ok(await subscriptionAction(path.slice('/api/subscriptions/'.length), input));
+      }
+      if (path === '/api/modules/import') {
+        const current = registry();
+        const imported = normalize(input);
+        const owned = current.subscriptions.flatMap(sub => sub.appIds);
+        if (imported.some(app => owned.includes(app.id))) throw Error('請從訂閱來源更新這個應用。');
+        saveRegistry({...current, apps: mergeApps(current.apps, imported)});
+        return ok(state());
+      }
+      if (path === '/api/modules/remove') {
+        const current = registry();
+        appById(input.id);
+        if (current.subscriptions.some(sub => sub.appIds.includes(input.id))) {
+          throw Error('請從訂閱來源移除這個應用。');
+        }
+        saveRegistry({...current, apps: current.apps.filter(app => app.id !== input.id)});
+        return ok(state());
+      }
       if(path==='/api/settings'){const app=appById(input.appId);commit(valueEntries(app,input.values));return ok(publicApp(app))}
       throw Error('無法完成此操作。');
     }
