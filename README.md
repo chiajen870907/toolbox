@@ -15,3 +15,7 @@ Toolbox 是代理 App 的本機腳本設定介面。開啟 `https://toolbox.com/
 以「新增應用」匯入 `.toolbox.json`，或貼上 GitHub Raw／jsDelivr 的 HTTPS JSON 訂閱連結。控制台、設定 API 和訂閱請求都經由同一條 Toolbox Rewrite。代理 App 下載並驗證訂閱，確認後才匯入。可在應用頁刷新、停用或移除來源，原有腳本設定會保留。
 
 收藏、備份、會話和資料頁仍需接上管理 API。
+
+## 模組頁面與 Quantumult X 安裝
+
+含自訂頁面的模組會在設定頁顯示頁面連結。Toolbox 經由同一條 Rewrite 載入模組來源旁的 `app.js`。宣告登入 Rewrite 或 Task 的模組，可以從設定頁開啟 Quantumult X 確認匯入。Task 配置可指向 `Scripts` 底下的本機腳本。

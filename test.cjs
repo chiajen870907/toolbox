@@ -11,7 +11,11 @@ async function verify(qx) {
   let offline = false;
   const url = 'https://raw.githubusercontent.com/example/toolbox/main/module.json';
   let manifest = {id:'remote',name:'Remote',settings:[{id:'remote_demo',type:'text',val:'default'}]};
-  const bodyFor = url => url.includes('raw.githubusercontent.com') ? JSON.stringify(manifest) : html;
+  const appScript = 'document.querySelector("main").textContent = window.toolboxData[0].name;';
+  const bodyFor = url => {
+    if (url.endsWith('/app.js')) return appScript;
+    return url.includes('raw.githubusercontent.com') ? JSON.stringify(manifest) : html;
+  };
   async function request(path, data) {
     let result;
     const context = {
@@ -53,6 +57,26 @@ async function verify(qx) {
   assert.equal(refreshed.name, 'Updated');
   assert.equal(refreshed.settings[0].value, 'saved');
   assert.equal((await api('remove', {id:url})).data.apps.length, 1);
+  const pageManifest = {
+    id:'example.pages', name:'Example pages', settings:[],
+    source:'https://raw.githubusercontent.com/example/toolbox/main/pages/module.json',
+    pages:[{id:'records',name:'紀錄'}]
+  };
+  const appId = pageManifest.id;
+  const pageUrl = '/app/' + appId + '/records';
+  assert.match(await request(pageUrl), /找不到模組頁面/);
+  const installed = JSON.parse(await request('/api/modules/import', pageManifest));
+  assert.equal(installed.data.apps.find(app => app.id === appId).pages[0].id, 'records');
+  store.set('qx_panel_page_' + appId + ':records', JSON.stringify({
+    source: pageManifest.source, data: [{name:'紀錄測試'}]
+  }));
+  const modulePage = await request(pageUrl);
+  assert.match(modulePage, /sandbox="allow-scripts"/);
+  assert.match(modulePage, /紀錄測試/);
+  assert.doesNotMatch(modulePage, /qx_panel_token|X-Panel-Token/);
+  assert.match(await request('/app/' + appId + '/undeclared'), /找不到模組頁面/);
+  assert(JSON.parse(await request('/api/modules/remove', {id:appId})).ok);
+  assert.match(await request(pageUrl), /找不到模組頁面/);
 }
 
 Promise.all([verify(true),verify(false)]).then(()=>console.log('QX and Surge-style runtime checks passed')).catch(e=>{console.error(e);process.exitCode=1});

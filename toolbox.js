@@ -62,7 +62,7 @@
     return v;
   }
   function normalizeCondition(c,ids,depth=0){if(!c)return null;if(depth>4||typeof c!=='object'||Array.isArray(c))throw Error('欄位聯動設定不正確。');if(Array.isArray(c.all)){if(c.all.length>10)throw Error('欄位聯動設定過多。');return {all:c.all.map(x=>normalizeCondition(x,ids,depth+1))}}if(!ids.includes(c.id)||!['boolean','number','string'].includes(typeof c.value))throw Error('欄位聯動設定不正確。');return {id:c.id,value:c.value}}
-  function normalizeApp(raw,packageId,packageName){
+  function normalizeApp(raw,packageId,packageName,source){
     if(!raw||typeof raw.id!=='string'||!/^[a-zA-Z0-9_.-]{1,100}$/.test(raw.id)||!raw.name||!Array.isArray(raw.settings)||raw.settings.length>100)throw Error('工具設定需要 id、name 與 settings。');
     const ids=raw.settings.map(f=>f.id);if(new Set(ids).size!==ids.length)throw Error('工具內有重複欄位。');
     const settings=raw.settings.map(f=>{
@@ -77,13 +77,27 @@
       out.showWhen=normalizeCondition(f.showWhen,ids);
       return out;
     });
-    return {id:raw.id,name:text(raw.name,100),description:text(raw.description||raw.desc,800),packageId:text(packageId,100),packageName:text(packageName,100),settings};
+    const pages = raw.pages === undefined ? [] : raw.pages;
+    if (!Array.isArray(pages) || pages.length > 20 || pages.some(page =>
+      !page || typeof page.id !== 'string' || !/^[a-zA-Z0-9_-]{1,60}$/.test(page.id) ||
+      typeof page.name !== 'string' || !page.name.trim()) ||
+      new Set(pages.map(page => page.id)).size !== pages.length) throw Error('模組頁面宣告格式不正確。');
+    const cookie = raw.cookie === true;
+    const task = raw.task === true;
+    const manifestUrl = source || raw.source;
+    if ((pages.length || cookie || task) && !isManifestUrl(manifestUrl)) {
+      throw Error('含腳本的模組須有 GitHub Raw 或 jsDelivr 的 HTTPS 來源。');
+    }
+    return {id:raw.id,name:text(raw.name,100),description:text(raw.description||raw.desc,800),
+      packageId:text(packageId,100),packageName:text(packageName,100),settings,
+      pages:pages.map(page => ({id:page.id,name:text(page.name,100)})),cookie,task,
+      source:isManifestUrl(manifestUrl) ? manifestUrl : undefined};
   }
-  function normalize(input){
+  function normalize(input, source){
     if(!input||typeof input!=='object'||Array.isArray(input))throw Error('請選擇工具的 JSON 設定檔。');
     const apps=Array.isArray(input.apps)?input.apps:[input];
     if(!apps.length||apps.length>20)throw Error('一次可匯入 1 到 20 個工具。');
-    const out=apps.map(a=>normalizeApp(a,input.id||a.id,input.name||a.name));
+    const out=apps.map(a=>normalizeApp(a,input.id||a.id,input.name||a.name,source));
     if(new Set(out.map(a=>a.id)).size!==out.length)throw Error('檔案內有重複工具。');return out;
   }
   function registry() {
@@ -102,9 +116,15 @@
     if (remaining.length + imported.length > 40) throw Error('最多可加入 40 個工具。');
     return [...remaining, ...imported];
   }
+  function isManifestUrl(url) {
+    return typeof url === 'string' && url.length <= 2048 &&
+      /^https:\/\/(?:raw\.githubusercontent\.com|cdn\.jsdelivr\.net)\/[a-z0-9_./@%+-]+\.json$/i.test(url);
+  }
+  function moduleAsset(app, name) {
+    return app.source.slice(0, app.source.lastIndexOf('/') + 1) + name;
+  }
   async function loadSubscription(url) {
-    if (typeof url !== 'string' || url.length > 2048 ||
-        !/^https:\/\/(?:raw\.githubusercontent\.com|cdn\.jsdelivr\.net)\/[a-z0-9_./@%+-]+\.json$/i.test(url)) {
+    if (!isManifestUrl(url)) {
       throw Error('請使用 GitHub Raw 或 jsDelivr 的 HTTPS JSON 連結。');
     }
     let response;
@@ -121,7 +141,7 @@
     } catch (_) {
       throw Error('訂閱設定檔格式不正確。');
     }
-    const apps = normalize(manifest);
+    const apps = normalize(manifest, url);
     return {url, name: text(manifest.name, 100) || apps[0].name, apps};
   }
   function saveSubscription(current, source, previous) {
@@ -144,7 +164,7 @@
       const revision = Date.now().toString(36) + Math.random().toString(36).slice(2);
       write(previewKey, JSON.stringify({source, revision, expires: Date.now() + 600000}));
       return {...source, revision, apps: source.apps.map(app => ({
-        id: app.id, name: app.name, fields: app.settings.length
+        id: app.id, name: app.name, fields: app.settings.length, pages: app.pages, cookie: app.cookie, task: app.task
       }))};
     }
     const current = registry();
@@ -195,13 +215,56 @@
       version: '1.0'
     };
   }
+  const escapeHtml = value => String(value).replace(/[&<>"']/g, character => ({
+    '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;'
+  })[character]);
+
+  async function serveModulePage(appId, pageId) {
+    const current = registry();
+    const app = current.apps.find(item => item.id === appId);
+    const page = app?.pages?.find(item => item.id === pageId);
+    if (!page || !isManifestUrl(app.source) ||
+        current.subscriptions.some(sub => !sub.enabled && sub.appIds.includes(appId))) {
+      return reply('找不到模組頁面。', 'text/plain; charset=utf-8', 'HTTP/1.1 404 Not Found');
+    }
+    const resource = await fetchResource(moduleAsset(app, 'app.js'));
+    if (Number(resource.statusCode) !== 200 || typeof resource.body !== 'string' ||
+        resource.body.length > 131072) throw Error('無法載入模組頁面。');
+    const latest = registry();
+    if (latest.subscriptions.some(sub => !sub.enabled && sub.appIds.includes(appId)) ||
+        !latest.apps.some(item => item.id === appId && item.source === app.source &&
+          item.pages?.some(entry => entry.id === pageId))) {
+      return reply('找不到模組頁面。', 'text/plain; charset=utf-8', 'HTTP/1.1 404 Not Found');
+    }
+    const published = read('qx_panel_page_' + appId + ':' + pageId, null);
+    const data = published?.source === app.source ? published.data : null;
+    const frame = '<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">' +
+      '<meta http-equiv="Content-Security-Policy" content="default-src &#39;none&#39;; script-src &#39;unsafe-inline&#39;; style-src &#39;unsafe-inline&#39;; img-src data:; base-uri &#39;none&#39;; form-action &#39;none&#39;">' +
+      '<style>:root{color-scheme:light dark}body{font:16px system-ui;margin:0}main{max-width:44rem;margin:auto;padding:1rem}input{font:inherit;padding:.5rem;width:min(100%,20rem)}article{border-bottom:1px solid #8886;padding:1rem 0;display:flow-root}h2{font-size:1.1rem;margin:0}img{width:5rem;height:5rem;object-fit:cover;float:left;margin-right:.8rem;border-radius:.5rem}</style>' +
+      '<main></main><script>window.toolboxData=' + safeJson(data) +
+      ';const entry=document.createElement("script");entry.textContent=' + safeJson(resource.body) +
+      ';document.body.append(entry);</script>';
+    const title = escapeHtml(page.name);
+    const html = '<!doctype html><html lang="zh-Hant"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">' +
+      '<title>' + title + '</title><style>:root{color-scheme:light dark}body{margin:0;font:16px system-ui}header{padding:1rem}iframe{width:100%;height:calc(100dvh - 4rem);border:0;display:block}</style>' +
+      '<header><a href="/#/app/' + encodeURIComponent(appId) + '">返回應用設定</a> · ' + title + '</header>' +
+      '<iframe sandbox="allow-scripts" title="' + title + '" srcdoc="' + escapeHtml(frame) + '"></iframe></html>';
+    return reply(html, 'text/html; charset=utf-8', 'HTTP/1.1 200 OK', {
+      'Content-Security-Policy': "default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; img-src data:; frame-ancestors 'none'; base-uri 'none'; form-action 'none'"
+    });
+  }
   try{
     const match=$request.url.match(/^(https?:\/\/[^/]+)(\/[^?#]*)?(?:\?([^#]*))?/);if(!match||match[1]!=='https://toolbox.com')throw Error('無法開啟此頁面。');const origin=match[1],path=match[2]||'/',query={};for(const part of(match[3]||'').split('&')){const i=part.indexOf('=');if(i>=0)query[decodeURIComponent(part.slice(0,i))]=decodeURIComponent(part.slice(i+1))}const method=String($request.method||'GET').toUpperCase();
     let token=storage.valueForKey('qx_panel_token');if(!token){token=Array.from({length:5},()=>Math.random().toString(36).slice(2)).join('');write('qx_panel_token',token)}
+    const modulePage = /^\/app\/([a-zA-Z0-9_.-]{1,100})\/([a-zA-Z0-9_-]{1,60})$/.exec(path);
+    if (method === 'GET' && path.startsWith('/app/')) {
+      if (modulePage) return await serveModulePage(modulePage[1], modulePage[2]);
+      return reply('找不到模組頁面。', 'text/plain; charset=utf-8', 'HTTP/1.1 404 Not Found');
+    }
     if(method==='GET'&&path==='/api/state')return ok(state());
     if(method==='POST'&&path.startsWith('/api/')){
       const headers={};for(const k of Object.keys($request.headers||{}))headers[k.toLowerCase()]=$request.headers[k];if(headers['x-panel-token']!==token||(headers.origin&&headers.origin!==origin)||!/^application\/json\b/i.test(headers['content-type']||''))throw Error('頁面已過期，請重新整理。');if(typeof $request.body!=='string'||$request.body.length>524288)throw Error('檔案內容太大或格式不正確。');let input;try{input=JSON.parse($request.body)}catch(_){throw Error('請選擇有效的 JSON 檔案。')}
-      if(path==='/api/modules/preview')return ok(normalize(input).map(a=>({id:a.id,name:a.name,fields:a.settings.length,replacing:modules().some(x=>x.id===a.id)})));
+      if(path==='/api/modules/preview')return ok(normalize(input).map(a=>({id:a.id,name:a.name,fields:a.settings.length,pages:a.pages,cookie:a.cookie,task:a.task,replacing:modules().some(x=>x.id===a.id)})));
       if (path.startsWith('/api/subscriptions/')) {
         return ok(await subscriptionAction(path.slice('/api/subscriptions/'.length), input));
       }
