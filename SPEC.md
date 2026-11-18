@@ -1,58 +1,25 @@
 # Toolbox 規格
 
-本文件描述目標架構。現有版本已拆分控制台 HTML 和代理入口，支援本機 JSON 匯入、GitHub Raw／jsDelivr 的遠端訂閱及設定儲存。同一條 Rewrite 已支援模組頁面。Quantumult X 可從模組設定頁確認匯入原生配置。ZIP 匯入與小火箭原生配置仍待實作。
+Toolbox 以 `https://toolbox.com/` 為入口。代理 App 的單一 Rewrite 提供控制台、設定 API 和模組頁面。
 
-## 安裝與執行
+## 匯入一份本機 JSON
 
-1. 安裝一次 Toolbox 的平台配置。它包含控制台網域與通用頁面 Rewrite。
-2. 從本機檔案或 HTTPS 匯入模組。Toolbox 驗證模組並顯示設定和額外頁面。
-3. 有任務或登入處理時，Toolbox 顯示對應的安裝操作。由 QX 或小火箭匯入或確認原生配置，使用者無須手寫規則。
-4. 模組各自使用原生排程。不同模組可各自設定時間。Toolbox 不設每分鐘輪詢的共用排程。
+使用者在 Safari 選取 iCloud Drive 或「檔案」裡的 `.toolbox.json`。普通 manifest 包含模組 ID、名稱與設定欄位。含程式資源的 JSON 使用 `{manifest, localFiles}`，檔案內容以字串存放。
 
-控制台入口為 `https://toolbox.com/`，由代理 App 的 Rewrite 在本機回應。
-
-## 模組目錄
-
-```text
-modules/<目錄名稱>/
-  <目錄名稱>.toolbox.json
-  app.js
-  cookie.js
-  task.js
-```
-
-JSON 必填。三支 JS 採固定檔名，全部選用，彼此可獨立存在。
-
-| 檔案 | 角色 | 觸發方式 |
+| 宣告 | JSON 內的資源 | 安裝位置 |
 |---|---|---|
-| app.js | 瀏覽器端的模組頁面入口 | 開啟 Toolbox 的模組頁面 |
-| cookie.js | 處理模組宣告的登入請求 | 代理 App 匹配模組的原生 Rewrite |
-| task.js | 模組任務 | 代理 App 手動執行或觸發原生排程 |
+| `pages` | `app.js` | Toolbox 本機儲存 |
+| `auth: true` | `rewrite.conf` | QX 的 `[rewrite_local]` 和 `[mitm]` |
+| `task: true` | `tasks.json` | QX 的 `[task_local]` |
 
-JSON 宣告穩定的模組 ID、名稱、版本、設定欄位、額外頁面、任務及登入處理能力。任務可宣告預設排程，登入處理須宣告確切主機與請求匹配條件。能力宣告決定顯示哪些安裝和啟用控制；檔案存在不會自行開啟任務或登入處理。
+相同模組 ID 再次匯入時保留欄位值。模組設定頁顯示每個 QX 配置區段的操作與複製按鈕。QX 從 `Scripts/modules/<目錄>/` 執行 `auth.js` 和 `task.js`。
 
-## 來源與更新
+## 模組頁面
 
-- 本機可選單一 JSON 匯入表單。含程式檔的模組，在檔案選擇器一次選取 JSON、app.js 及宣告的原生配置；同目錄檔案需要手動選取。
-- 遠端訂閱目前接受 GitHub Raw 或 jsDelivr 的 HTTPS JSON 連結，由 Toolbox 的平台轉接層下載。以 manifest URL 所在的目錄解析 `app.js`、`rewrite.conf` 和 `tasks.json`。本機模組資源使用選取的檔案，原生配置使用 QX Scripts 相對路徑。
-- 匯入前預覽模組 ID、版本、頁面、任務與登入網域。確認後登錄模組和來源。刷新遠端模組時，驗證新版本成功後才替換目前版本。
-- 用相同 ID 更新模組時保留設定。ZIP 只接受預期的模組檔案及有界的大小，拒絕跨目錄路徑和重複檔名。
-- 本機 ZIP 的頁面資源由 Toolbox 登錄。原生 Task／Rewrite 是否能使用本地腳本，取決於代理 App 的檔案位置與匯入能力；若無法代裝，顯示配置與所需檔案。
-
-## 統一入口與平台轉接
-
-Toolbox 的一條 Rewrite 處理控制台、設定 API 和訂閱 API。同一條 Rewrite 也提供 `/app/<模組 ID>/<頁面 ID>`。路由只接受已登錄且啟用的模組及其宣告的頁面。同一模組的多個頁面共用 app.js。新增頁面不必加 Rewrite。
-
-app.js 在隔離的瀏覽器 iframe 執行。原生腳本將頁面資料發布到 `qx_panel_page_<模組 ID>:<頁面 ID>`，資料格式為 `{source,data}`。遠端模組以 manifest URL 比對來源；本機模組的 `source` 為 `local`。Toolbox 比對來源後把 `data` 傳給 `window.toolboxData`。插件頁面須有隔離及模組權限限制，不能直接讀取其他模組資料或代理環境憑證。紀錄和圖片等需要代理端參與時，先定義通用資料契約，供模組產出自己命名空間中的資料。
-
-平台轉接層統一儲存、HTTP、通知和回應介面。cookie.js 和 task.js 使用同一套模組介面，由各平台的原生配置註冊。模組停用時，已安裝的腳本須檢查模組狀態並跳過執行；此開關不能代替代理 App 移除原生規則。UI 要區分「未安裝」「已安裝」與「狀態未確認」。
-
-參考 BoxJS 的統一入口、模組登錄、快取和多平台轉接。模組 JSON 是配置資料；匯入不會把它指定的程式當成代理端程式直接執行。
+`/app/<模組 ID>/<頁面 ID>` 使用已匯入的 `app.js`，只開放 manifest 宣告的頁面。腳本在隔離的 iframe 執行。原生腳本可在 `qx_panel_page_<模組 ID>:<頁面 ID>` 發布 `{source:"local",data}`。Toolbox 將該頁面的資料傳給 `window.toolboxData`。
 
 ## 驗收
 
-- QX 和小火箭各安裝一次核心配置後，可從本機與遠端匯入同一個測試模組。
-- 匯入後能開啟它宣告的頁面。再加入第二個模組時，無須修改核心，也無須新增頁面 Rewrite。
-- 含任務或登入處理的模組能取得對應平台的配置。兩個模組可依各自時間執行，停用後跳過。
-- 用獨立模組驗證紀錄頁。由模組提供資料與顯示邏輯。
-- 上線前分別在 QX 與小火箭驗證資源匯入、原生排程、登入請求分派和模組頁面隔離。
+- 匯入一份設定 JSON 或含頁面與配置的本機模組 JSON。
+- 匯入後可開啟已宣告的頁面，並查看 QX 各區段的安裝方式。
+- 本機頁面在上游下載失敗時仍可讀取。原生 Rewrite 和 Task 由 QX 執行。

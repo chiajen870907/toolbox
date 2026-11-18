@@ -12,16 +12,12 @@ Toolbox 是代理 App 的本機腳本設定介面。開啟 `https://toolbox.com/
 - **Shadowrocket／Surge**：匯入 `config/toolbox.sgmodule` 並啟用對應的腳本與 MITM。
 - 配置和網頁從 GitHub 公開檔案提供。兩種執行介面有本機模擬測試，Shadowrocket 和 Surge 尚需實機驗證。
 
-以「新增應用」匯入 `.toolbox.json`，或貼上 GitHub Raw／jsDelivr 的 HTTPS JSON 訂閱連結。控制台、設定 API 和訂閱請求都經由同一條 Toolbox Rewrite。代理 App 下載並驗證訂閱，確認後才匯入。可在應用頁刷新、停用或移除來源，原有腳本設定會保留。
+## 匯入本機模組
+
+在 Toolbox 點「＋」，從 iCloud Drive 或「檔案」選一份 `.toolbox.json`。再次匯入相同 ID 時會保留已儲存的設定。
+
+只含設定表單的模組可匯入單一 manifest。含頁面或原生配置的 JSON 由 `manifest` 和 `localFiles` 組成。依 manifest 宣告，在 `localFiles` 放入 `app.js`、`rewrite.conf` 或 `tasks.json` 的文字內容。
+
+模組設定頁會顯示要加入 QX 的 Rewrite、MITM 和 Task 配置。QX 從 `Scripts/modules/<目錄>/` 執行 `auth.js` 和 `task.js`。自訂頁面由 Toolbox 使用匯入的 `app.js` 開啟。
 
 收藏、備份、會話和資料頁仍需接上管理 API。
-
-## 模組頁面與 Quantumult X 安裝
-
-含自訂頁面的模組會在設定頁顯示頁面連結，並經由同一條 Toolbox Rewrite 開啟。
-
-- 本機模組從「新增應用 → 匯入本機模組」選取模組 JSON、`app.js`，以及它宣告的 `rewrite.conf` 或 `tasks.json`。Toolbox 使用匯入的 `app.js`。從模組設定頁查看並複製原生配置，加入 Quantumult X 現有的對應區段。`cookie.js` 和 `task.js` 由 QX 從 `Scripts/modules/<目錄>/` 執行。
-- HTTPS 訂閱使用 manifest 同目錄的 `app.js` 和原生配置。可從模組設定頁開啟 Quantumult X 確認匯入。
-
-
-本機模組也可選「匯入 .toolbox 壓縮檔」。可用 `node pack-module.cjs <模組 JSON> <輸出.toolbox>` 封裝一般模組 JSON 或內含 `manifest` 與 `localFiles` 的本機匯入 JSON。格式為 UTF-8 標頭 `TOOLBOX1\n` 接單一 gzip JSON，壓縮前後都以 512 KB 為限。

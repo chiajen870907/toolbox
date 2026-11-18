@@ -24,7 +24,7 @@ const BOOT=__QX_BOOT__;
 const $=id=>document.getElementById(id);
 const node=(tag,cls,text)=>{const n=document.createElement(tag);if(cls)n.className=cls;if(text!==undefined)n.textContent=String(text);return n};
 const icons={home:'⌂',apps:'▦',data:'≡',settings:'⚙',search:'⌕',plus:'＋',back:'‹',close:'×',star:'☆',filled:'★',more:'•••'};
-let state=BOOT.state,manage={available:false,preferences:{favorites:[],theme:'system',language:'zh-Hant',debug:false},metadata:{},subscriptions:[],sessions:[]};
+let state=BOOT.state,manage={available:false,preferences:{favorites:[],theme:'system',language:'zh-Hant',debug:false},metadata:{},sessions:[]};
 let search='',category='全部',listMode=false,activeForm=null,dataRows=[],saveQueue=Promise.resolve(),routeVersion=0;
 const pendingForms=new Set();
 function button(label,action,cls='button'){const b=node('button',cls,label);b.type='button';b.onclick=()=>run(action,b);return b}
@@ -54,91 +54,15 @@ function textViewer(title,value){const d=openSheet(title),pre=node('pre','code',
 async function copy(text){try{await navigator.clipboard.writeText(text);toast('已複製')}catch(_){const d=openSheet('複製內容'),t=node('textarea');t.value=text;t.readOnly=true;d.append(status('長按內容並選擇「複製」。'),t);t.focus();t.select()}}
 function download(value,name){const url=URL.createObjectURL(new Blob([JSON.stringify(value,null,2)],{type:'application/json'}));const a=node('a');a.href=url;a.download=name;a.click();setTimeout(()=>URL.revokeObjectURL(url),1000)}
 function chooseFile(handler){const i=node('input');i.type='file';i.accept='.toolbox.json,.json,application/json';i.hidden=true;document.body.append(i);i.onchange=async()=>{try{const f=i.files[0];if(!f)return;if(f.size>524288)throw Error('檔案超過 512 KB，請拆分後匯入');await handler(JSON.parse(await f.text()))}catch(e){showError(e instanceof SyntaxError?Error('JSON 格式不正確，請檢查檔案內容'):e)}finally{i.remove()}};i.click()}
-async function readModuleArchive(file) {
-  const limit = 512 * 1024;
-  const magic = 'TOOLBOX1\n';
-  if (file.size > limit) throw Error('模組壓縮檔超過 512 KB');
-  const header = await file.slice(0, magic.length).text();
-  if (header !== magic) throw Error('不支援的 .toolbox 格式或版本');
-  if (typeof DecompressionStream !== 'function') {
-    throw Error('此瀏覽器無法解壓縮，請更新 Safari 或匯入本機模組 JSON');
-  }
-  const stream = file.slice(magic.length).stream().pipeThrough(new DecompressionStream('gzip'));
-  const reader = stream.getReader();
-  const decoder = new TextDecoder('utf-8', {fatal:true});
-  let size = 0;
-  let json = '';
-  try {
-    while (true) {
-      const {value, done} = await reader.read();
-      if (done) break;
-      size += value.byteLength;
-      if (size > limit) {
-        await reader.cancel();
-        throw Error('模組解壓後超過 512 KB');
-      }
-      json += decoder.decode(value, {stream:true});
-    }
-    return JSON.parse(json + decoder.decode());
-  } catch (error) {
-    if (size > limit) throw Error('模組解壓後超過 512 KB');
-    throw Error('無法解壓縮或讀取模組內容');
-  } finally {
-    reader.releaseLock();
-  }
-}
-
-function archiveModuleSheet() {
-  const d = openSheet('匯入 .toolbox 壓縮檔');
-  const label = node('label','stack','選取 .toolbox 檔案');
-  const picker = node('input');
-  picker.type = 'file';
-  label.append(picker);
-  d.append(label, button('預覽匯入', async () => {
-    const file = picker.files[0];
-    if (!file) throw Error('請選取 .toolbox 檔案');
-    await importApps(await readModuleArchive(file));
-  }, 'button primary wide'));
-}
-function localModuleSheet() {
-  const d = openSheet('匯入本機模組');
-  const label = node('label','stack','選擇模組 JSON 與相關檔案');
-  const picker = node('input');
-  picker.type = 'file';
-  picker.multiple = true;
-  picker.accept = '.json,.js,.conf';
-  label.append(picker);
-  d.append(label, status('有頁面時選 app.js，有登入或任務時加選 rewrite.conf 或 tasks.json。原生腳本由 QX 從 Scripts 資料夾讀取。'));
-  d.append(button('預覽匯入', async () => {
-    const files = [...picker.files];
-    const manifests = files.filter(file => /\.json$/i.test(file.name) && file.name !== 'tasks.json');
-    if (manifests.length !== 1) throw Error('請選擇一份模組 JSON');
-    const limits = {'app.js':131072,'rewrite.conf':16384,'tasks.json':16384};
-    const localFiles = {};
-    for (const file of files) {
-      if (!Object.prototype.hasOwnProperty.call(limits, file.name)) continue;
-      if (file.size > limits[file.name] || file.name in localFiles) throw Error(file.name+' 檔案太大或重複');
-      localFiles[file.name] = await file.text();
-    }
-    if (manifests[0].size > 131072) throw Error('模組 JSON 超過 128 KB');
-    let manifest;
-    try { manifest = JSON.parse(await manifests[0].text()); }
-    catch (_) { throw Error('模組 JSON 格式不正確'); }
-    await importApps({manifest, localFiles});
-  }, 'button primary wide'));
-}
-function addSheet(){const d=openSheet('新增應用');d.append(button('匯入 JSON 檔',()=>{closeSheet();chooseFile(importApps)},'sheet-action'),button('匯入 .toolbox 壓縮檔',archiveModuleSheet,'sheet-action'),button('匯入本機模組',localModuleSheet,'sheet-action'),button('貼上內容',pasteSheet,'sheet-action'),button('新增訂閱 URL',subscriptionSheet,'sheet-action'))}
-function pasteSheet(){const d=openSheet('貼上設定內容'),t=node('textarea');t.rows=10;t.placeholder='貼上 toolbox.json 設定內容';t.setAttribute('aria-label','設定 JSON');d.append(t,button('預覽匯入',async()=>{let value;try{value=JSON.parse(t.value)}catch(_){throw Error('JSON 格式不正確，請檢查括號與逗號')}await importApps(value)},'button primary wide'))}
-async function importApps(input){await flushAll();const preview=await api('modules/preview',input);const d=openSheet('匯入預覽');d.append(status('匯入後保留已有設定。'));for(const a of preview)d.append(node('p','preview-row',previewAppLabel(a)+' · '+(a.replacing?'更新':'新增')));d.append(button('確認匯入',async()=>{state=await api('modules/import',input);if(manage.available)await api('manage/metadata',{input});await reloadManage();closeSheet();await navigate('apps');render();toast('已匯入')},'button primary wide'))}
-function subscriptionSheet(){const d=openSheet('新增訂閱'),label=node('label','stack','訂閱 URL'),input=node('input');input.type='url';input.placeholder='https://raw.githubusercontent.com/…/apps.toolbox.json';input.autocapitalize='none';label.append(input);d.append(label,status('支援 GitHub Raw 或 jsDelivr 的 HTTPS JSON 連結。'));const submit=button('載入並預覽',async()=>{const result=await api('subscriptions/preview',{url:input.value.trim()});const box=openSheet('訂閱預覽');box.append(node('p','',result.name),node('p','muted',result.url));for(const app of result.apps)box.append(node('p','preview-row',previewAppLabel(app)));box.append(button('加入訂閱',async()=>{await api('subscriptions/add',{url:result.url,revision:result.revision});await refresh();closeSheet();await navigate('apps');render();toast('已加入訂閱')},'button primary wide'))},'button primary wide');d.append(submit)}
-function empty(title,description,actions=true){const c=node('section','empty');c.append(node('div','empty-icon','▦'),node('h2','',title),node('p','muted',description));if(actions){const row=node('div','stack');row.append(button('新增訂閱',subscriptionSheet,'button primary wide'),button('匯入設定檔',()=>chooseFile(importApps),'button wide'));c.append(row)}return c}
+async function importApps(input){await flushAll();const preview=await api('modules/preview',input);const d=openSheet('匯入預覽');d.append(status('匯入後保留已有設定。'));for(const a of preview)d.append(node('p','preview-row',previewAppLabel(a)+' · '+(a.replacing?'更新':'新增')));d.append(button('確認匯入',async()=>{state=await api('modules/import',input);if(manage.available)await api('manage/metadata',{input});await reloadManage();closeSheet();await navigate(preview.length===1?'app/'+encodeURIComponent(preview[0].id):'apps');render();toast('已匯入')},'button primary wide'))}
+function empty(title,description,actions=true){const c=node('section','empty');c.append(node('div','empty-icon','▦'),node('h2','',title),node('p','muted',description));if(actions){const row=node('div','stack');row.append(button('匯入模組 JSON',()=>chooseFile(importApps),'button primary wide'));c.append(row)}return c}
 function viewToggle(){const c=node('div','segmented');for(const [mode,label] of [[false,'卡片'],[true,'列表']]){const b=button(label,()=>{listMode=mode;render()},mode===listMode?'selected':'');b.setAttribute('aria-pressed',String(mode===listMode));c.append(b)}return c}
 async function toggleFavorite(id){await flushAll();const ids=favorites();await savePreference({favorites:ids.includes(id)?ids.filter(x=>x!==id):[...ids,id]});render();toast(ids.includes(id)?'已取消收藏':'已收藏')}
 function favoriteOptions(app){const d=openSheet(app.name);const ids=favorites(),at=ids.indexOf(app.id);d.append(button('移到最前',async()=>{await savePreference({favorites:[app.id,...ids.filter(x=>x!==app.id)]});closeSheet();render()},'sheet-action'),button('往前移一位',async()=>{if(at>0){[ids[at-1],ids[at]]=[ids[at],ids[at-1]];await savePreference({favorites:ids})}closeSheet();render()},'sheet-action'),button('往後移一位',async()=>{if(at>=0&&at<ids.length-1){[ids[at+1],ids[at]]=[ids[at],ids[at+1]];await savePreference({favorites:ids})}closeSheet();render()},'sheet-action'),button('取消收藏',async()=>{await toggleFavorite(app.id);closeSheet()},'sheet-action danger'))}
 function appList(apps,home=false){const list=node('div',home&&!listMode?'app-grid':'app-list');for(const app of apps){const m=metadata(app),item=node('article','app-item'),open=button('',()=>navigate('app/'+encodeURIComponent(app.id)),'app-open'),symbol=node('span','app-symbol',(app.name||'?').slice(0,1)),text=node('span','app-text');text.append(node('strong','',app.name),node('span','app-description',app.description||'沒有簡述'),node('span','app-author',m.author||'未提供作者'));open.append(symbol,text);const star=iconButton(favorites().includes(app.id)?'取消收藏':'收藏應用',favorites().includes(app.id)?'filled':'star',()=>toggleFavorite(app.id),'icon-button favorite');star.setAttribute('aria-pressed',String(favorites().includes(app.id)));star.disabled=!manage.available;item.append(open,star);if(home){let timer,moved=false,start;item.addEventListener('pointerdown',e=>{if(e.target.closest('.favorite'))return;moved=false;start=[e.clientX,e.clientY];timer=setTimeout(()=>{moved=true;favoriteOptions(app)},550)});item.addEventListener('pointermove',e=>{if(start&&Math.hypot(e.clientX-start[0],e.clientY-start[1])>10)clearTimeout(timer)});for(const ev of ['pointerup','pointercancel','pointerleave'])item.addEventListener(ev,()=>clearTimeout(timer));open.addEventListener('click',e=>{if(moved){e.preventDefault();e.stopImmediatePropagation()}},true);item.addEventListener('contextmenu',e=>{e.preventDefault();favoriteOptions(app)});item.append(iconButton('排序與取消收藏','more',()=>favoriteOptions(app),'icon-button app-menu'))}list.append(item)}return list}
-function home(view){const quick=node('div','quick-actions');quick.append(button('匯入設定檔',()=>chooseFile(importApps),'button primary'),button('新增訂閱',subscriptionSheet));view.append(quick,node('p','summary',state.apps.length+' 個應用 · 儲存在 QX 本機'));const h=contentHeading('收藏應用');h.append(viewToggle());view.append(h);const apps=favorites().map(id=>availableApps().find(a=>a.id===id)).filter(Boolean);if(!apps.length){view.append(empty(state.apps.length?'尚未收藏應用':'尚未加入應用',state.apps.length?'到應用列表點星號收藏，之後可在首頁快速開啟。':'新增訂閱或匯入設定檔，開始管理應用。',false));if(state.apps.length)view.append(button('查看全部應用',()=>navigate('apps'),'button wide'));else{const row=node('div','empty-actions');row.append(button('新增訂閱',subscriptionSheet,'button primary wide'),button('匯入設定檔',()=>chooseFile(importApps),'button wide'));view.append(row)}}else view.append(appList(apps,true))}
+function home(view){const quick=node('div','quick-actions');quick.append(button('匯入模組 JSON',()=>chooseFile(importApps),'button primary'));view.append(quick,node('p','summary',state.apps.length+' 個應用 · 儲存在 QX 本機'));const h=contentHeading('收藏應用');h.append(viewToggle());view.append(h);const apps=favorites().map(id=>availableApps().find(a=>a.id===id)).filter(Boolean);if(!apps.length){view.append(empty(state.apps.length?'尚未收藏應用':'尚未加入應用',state.apps.length?'到應用列表點星號收藏，之後可在首頁快速開啟。':'從 iCloud Drive 或「檔案」選取模組 JSON。',false));if(state.apps.length)view.append(button('查看全部應用',()=>navigate('apps'),'button wide'));else{const row=node('div','empty-actions');row.append(button('匯入模組 JSON',()=>chooseFile(importApps),'button primary wide'));view.append(row)}}else view.append(appList(apps,true))}
 function searchInput(value,placeholder,onInput){const label=node('label','search-box'),i=node('input');label.append(node('span','','⌕'));i.type='search';i.value=value;i.placeholder=placeholder;i.setAttribute('aria-label',placeholder);i.oninput=()=>onInput(i.value);label.append(i);return label}
-function appsPage(view){const sticky=node('div','sticky-search'),results=node('div'),chips=node('div','chips');sticky.append(searchInput(search,'搜尋名稱、作者或設定 key',value=>{search=value;draw()}));const categories=['全部',...new Set(availableApps().map(appCategory))];if(!categories.includes(category))category='全部';for(const c of categories)chips.append(button(c,()=>{category=c;render()},'chip'+(category===c?' selected':'')));sticky.append(chips);view.append(sticky,results);function draw(){results.replaceChildren();const q=search.toLocaleLowerCase();const list=availableApps().filter(a=>(category==='全部'||appCategory(a)===category)&&[a.name,a.description,metadata(a).author,...a.settings.map(f=>f.id)].join(' ').toLocaleLowerCase().includes(q));results.append(contentHeading('全部應用',list.length+' 個'));results.append(list.length?appList(list):empty(state.apps.length?'沒有符合的應用':'尚未加入應用',state.apps.length?'請換個關鍵字或分類。':'可直接新增訂閱或匯入設定檔。',!state.apps.length));}draw();const sub=card('訂閱來源');sub.append(button('新增訂閱',subscriptionSheet,'button wide'));if(!(state.subscriptions||[]).length)sub.append(node('p','muted','尚未加入訂閱來源'));for(const s of (state.subscriptions||[])){const row=node('div','subscription');row.append(node('strong','',s.name||s.url),node('small','muted',s.url),node('small','muted',(s.enabled?'已啟用':'已停用')+' · '+s.appIds.length+' 個應用'+(s.updatedAt?' · '+new Date(s.updatedAt).toLocaleDateString('zh-TW'):'')));const actions=node('div','actions');actions.append(button('刷新',async()=>{await api('subscriptions/refresh',{id:s.id});await refresh();render();toast('訂閱已更新')}),button(s.enabled?'停用':'啟用',async()=>{await api('subscriptions/toggle',{id:s.id,enabled:!s.enabled});await refresh();render()}),button('刪除',async()=>{if(!confirm('刪除這個訂閱來源？'))return;if(!confirm('確認移除此來源與它的應用表單？腳本設定仍會保留。'))return;await api('subscriptions/remove',{id:s.id});await refresh();render();toast('訂閱已刪除')},'button danger'));row.append(actions);sub.append(row)}view.append(sub)}
+function appsPage(view){const sticky=node('div','sticky-search'),results=node('div'),chips=node('div','chips');sticky.append(searchInput(search,'搜尋名稱、作者或設定 key',value=>{search=value;draw()}));const categories=['全部',...new Set(availableApps().map(appCategory))];if(!categories.includes(category))category='全部';for(const c of categories)chips.append(button(c,()=>{category=c;render()},'chip'+(category===c?' selected':'')));sticky.append(chips);view.append(sticky,results);function draw(){results.replaceChildren();const q=search.toLocaleLowerCase();const list=availableApps().filter(a=>(category==='全部'||appCategory(a)===category)&&[a.name,a.description,metadata(a).author,...a.settings.map(f=>f.id)].join(' ').toLocaleLowerCase().includes(q));results.append(contentHeading('全部應用',list.length+' 個'));results.append(list.length?appList(list):empty(state.apps.length?'沒有符合的應用':'尚未加入應用',state.apps.length?'請換個關鍵字或分類。':'從 iCloud Drive 或「檔案」選取模組 JSON。',!state.apps.length));}draw()}
 // 新增：欄位類型 → 渲染函式。設定值格式與既有 API 相同。
 const fieldRenderers={
  text:(f)=>basicInput(f,f.sensitive?'password':'text'),
@@ -168,39 +92,32 @@ function appResources(app) {
   for (const page of app.pages || []) {
     link(page.name, '/app/' + encodeURIComponent(app.id) + '/' + encodeURIComponent(page.id));
   }
-  if (app.local && (app.cookie || app.task)) {
-    if (BOOT.platform === 'qx') {
-      if (app.local.rewrite) {
-        const lines = app.local.rewrite.split('\n');
-        const hostname = lines.find(line => line.startsWith('hostname'));
-        const rule = lines.find(line => line.startsWith('^'));
-        resources.append(button('查看本機登入 Rewrite', () => textViewer('加入 QX 對應區段',
-          '[rewrite_local]\n'+rule+'\n\n[mitm]\n'+hostname)));
-      }
-      if (app.local.taskConfig) {
-        resources.append(button('查看本機 Task 配置', () => textViewer('加入 QX 的 [task_local]',
-          app.local.taskConfig)));
-      }
-      resources.append(node('p','muted','請將配置加入 QX 的現有區段。MITM 主機請合併到既有清單。安裝狀態未確認。'));
-    } else {
-      resources.append(node('p','muted','這個模組的登入與任務目前使用 Quantumult X 配置。'));
-    }
+  if (!app.local?.rewrite && !app.local?.taskConfig) return resources;
+  const guide = card('Quantumult X 設定');
+  if (BOOT.platform !== 'qx') {
+    guide.append(node('p','muted','這個模組的登入與任務使用 Quantumult X 配置。'));
+    resources.append(guide);
+    return resources;
   }
-  if (app.source && (app.cookie || app.task)) {
-    if (BOOT.platform === 'qx') {
-      const base = app.source.slice(0, app.source.lastIndexOf('/') + 1);
-      if (app.cookie) {
-        const config = JSON.stringify({rewrite_remote:[base+'rewrite.conf,tag='+app.id]});
-        link('安裝登入 Rewrite', 'quantumult-x:///add-resource?remote-resource='+encodeURIComponent(config));
-      }
-      if (app.task) {
-        link('匯入 Task', 'quantumult-x:///ui?module=gallery&type=task&action=add&content='+encodeURIComponent(JSON.stringify([base+'tasks.json'])));
-      }
-      resources.append(node('p','muted','請在 Quantumult X 確認匯入。安裝狀態未確認。'));
-    } else {
-      resources.append(node('p','muted','這個模組的登入與任務目前使用 Quantumult X 配置。'));
-    }
+  guide.append(node('p','muted','在 QX 編輯使用中的設定檔，將下列內容加入既有區段。'));
+  const steps = node('ol');
+  function step(instruction, value) {
+    const item = node('li');
+    item.append(node('p','',instruction), node('pre','code',value), button('複製',()=>copy(value)));
+    steps.append(item);
   }
+  if (app.local.rewrite) {
+    const lines = app.local.rewrite.split('\n');
+    const rule = lines.find(line => line.startsWith('^'));
+    const host = lines.find(line => line.startsWith('hostname')).split('=')[1].trim();
+    step('在 [rewrite_local] 加入下方規則。若已有同一條登入規則，更新腳本路徑即可。', rule);
+    step('把這個主機名稱合併到 [mitm] 的 hostname 清單，並確認 QX 的 MITM 已開啟。', host);
+  }
+  if (app.local.taskConfig) {
+    step('在 [task_local] 加入下方排程，再到 QX 的任務列表確認是否啟用。', app.local.taskConfig);
+  }
+  guide.append(steps);
+  resources.append(guide);
   return resources;
 }
 function previewAppLabel(app) {
@@ -217,10 +134,10 @@ function editData(row){const d=openSheet('編輯資料');d.append(node('code',''
 function diffRows(d,changes){if(!changes.length)d.append(status('沒有需要變更的資料。'));for(const change of changes){const row=node('div','diff-row');row.append(node('code','',change.key),node('small','muted','目前：'+(change.before??'未儲存')),node('small','','變更後：'+(change.after??'刪除')));d.append(row)}}
 async function previewRestore(input){const preview=await manager('backup/preview',{input});const d=openSheet('還原差異');d.append(status('僅套用下列資料，不刪除其他 key。'));diffRows(d,preview.changes);if(preview.skipped?.length)d.append(status('略過 '+preview.skipped.length+' 個敏感或不支援的 key。'));d.append(button('套用還原',async()=>{if(!confirm('套用以上 '+preview.changes.length+' 筆變更？'))return;if(!confirm('確認還原？目前值將被取代。'))return;await manager('backup/apply',{input,revision:preview.revision});await refresh();closeSheet();render();toast('還原完成')},'button primary wide'))}
 async function previewSession(session){const preview=await manager('sessions/preview',{id:session.id});const d=openSheet('切換會話：'+session.name);diffRows(d,preview.changes);d.append(button('套用會話',async()=>{if(!confirm('套用此會話？'))return;if(!confirm('確認取代目前應用設定？登入憑證會保留。'))return;await manager('sessions/apply',{id:session.id,revision:preview.revision});await refresh();closeSheet();render();toast('已切換會話')},'button primary wide'))}
-function settingsPage(view){const preferences=card('偏好設定');const theme=node('select');theme.setAttribute('aria-label','主題');for(const [value,label] of [['system','跟隨系統'],['light','淺色'],['dark','深色']]){const op=node('option','',label);op.value=value;op.selected=manage.preferences.theme===value;theme.append(op)}theme.onchange=()=>run(async()=>{await savePreference({theme:theme.value});toast('已儲存')});preferences.append(node('label','field-label','主題'),theme);const language=node('select');language.setAttribute('aria-label','語言');language.append(node('option','','繁體中文'));preferences.append(node('label','field-label','語言'),language,node('p','muted','目前提供繁體中文。'));const debug=node('input');debug.type='checkbox';debug.checked=manage.preferences.debug;debug.onchange=()=>run(async()=>{await savePreference({debug:debug.checked});toast('已儲存')});const l=node('label','choice');l.append(debug,node('span','','除錯模式'));preferences.append(l,node('p','muted','顯示管理操作的錯誤詳情，不記錄登入憑證。'));if(!manage.available){theme.disabled=true;debug.disabled=true;preferences.append(status('偏好儲存介面尚未啟用。','error'))}view.append(preferences);const about=card('關於');about.append(node('p','','Toolbox · 2.2.0'),node('p','muted','介面參考 BoxJS 使用流程。使用原生 HTML、CSS 與 JavaScript，無外部依賴。'),node('p','muted','授權：尚未指定；未附帶第三方原始碼。'));const a=node('a','button wide','BoxJS 配置文件');a.href='https://docs.boxjs.app/dev/configure';a.target='_blank';a.rel='noopener noreferrer';about.append(a,button('功能與儲存限制',()=>info('功能限制','QX 無法列舉所有 key；資料頁與備份限於已知 key。登入憑證預設遮蔽，不參與備份或會話。控制台不直接啟動 Task。主題跟隨系統或手動設定。')));view.append(about)}
+function settingsPage(view){const preferences=card('偏好設定');const theme=node('select');theme.setAttribute('aria-label','主題');for(const [value,label] of [['system','跟隨系統'],['light','淺色'],['dark','深色']]){const op=node('option','',label);op.value=value;op.selected=manage.preferences.theme===value;theme.append(op)}theme.onchange=()=>run(async()=>{await savePreference({theme:theme.value});toast('已儲存')});preferences.append(node('label','field-label','主題'),theme);const language=node('select');language.setAttribute('aria-label','語言');language.append(node('option','','繁體中文'));preferences.append(node('label','field-label','語言'),language,node('p','muted','目前提供繁體中文。'));const debug=node('input');debug.type='checkbox';debug.checked=manage.preferences.debug;debug.onchange=()=>run(async()=>{await savePreference({debug:debug.checked});toast('已儲存')});const l=node('label','choice');l.append(debug,node('span','','除錯模式'));preferences.append(l,node('p','muted','顯示管理操作的錯誤詳情，不記錄登入憑證。'));if(!manage.available){theme.disabled=true;debug.disabled=true;preferences.append(status('偏好儲存介面尚未啟用。','error'))}view.append(preferences);const about=card('關於');about.append(node('p','','Toolbox · 2.3.0'),node('p','muted','介面參考 BoxJS 使用流程。使用原生 HTML、CSS 與 JavaScript，無外部依賴。'),node('p','muted','授權：尚未指定；未附帶第三方原始碼。'));const a=node('a','button wide','BoxJS 配置文件');a.href='https://docs.boxjs.app/dev/configure';a.target='_blank';a.rel='noopener noreferrer';about.append(a,button('功能與儲存限制',()=>info('功能限制','QX 無法列舉所有 key；資料頁與備份限於已知 key。登入憑證預設遮蔽，不參與備份或會話。控制台不直接啟動 Task。主題跟隨系統或手動設定。')));view.append(about)}
 async function reloadManage(){try{manage=await api('manage/state',{});manage.available=true}catch(_){manage.available=false}applyTheme()}
 async function refresh(){state=await api('state');await reloadManage()}
 function render(){activeForm=null;const view=$('view');view.replaceChildren();routeVersion++;const r=route(),detail=['app','records'].includes(r.name),tab=detail?'apps':r.name;document.querySelectorAll('[data-tab]').forEach(b=>{const on=b.dataset.tab===tab;b.classList.toggle('active',on);b.setAttribute('aria-current',on?'page':'false')});$('page-title').textContent=({home:'Toolbox',apps:'應用',data:'資料',settings:'設定',app:'應用設定',records:'應用設定'})[r.name]||'首頁';$('back').hidden=!detail;$('search-action').hidden=detail||['data','settings'].includes(r.name);$('add-action').hidden=['data','settings'].includes(r.name);if(r.name==='app'||r.name==='records'){const app=availableApps().find(a=>a.id===r.id);if(!app){view.append(empty('找不到應用','請回到應用列表重新開啟。',false));return}run(()=>appPage(view,app));return}if(r.name==='apps')appsPage(view);else if(r.name==='data')dataPage(view);else if(r.name==='settings')settingsPage(view);else home(view);window.scrollTo(0,0)}
-$('sheet-close').onclick=closeSheet;$('sheet').addEventListener('click',e=>{if(e.target===$('sheet')){const rect=$('sheet').getBoundingClientRect();if(e.clientY<rect.top||e.clientY>rect.bottom||e.clientX<rect.left||e.clientX>rect.right)closeSheet()}});$('add-action').onclick=addSheet;$('back').onclick=()=>navigate(route().name==='records'?'app/'+encodeURIComponent(route().id):'apps');$('search-action').onclick=async()=>{await navigate('apps');setTimeout(()=>$('view').querySelector('input[type=search]')?.focus(),100)};document.querySelectorAll('[data-tab]').forEach(b=>b.onclick=()=>navigate(b.dataset.tab));window.addEventListener('hashchange',()=>{run(async()=>{await flushAll();render()})});window.addEventListener('beforeunload',e=>{if(pendingForms.size){e.preventDefault();e.returnValue=''}});document.addEventListener('visibilitychange',()=>{if(document.hidden)run(flushAll)});render();reloadManage().then(render);
+$('sheet-close').onclick=closeSheet;$('sheet').addEventListener('click',e=>{if(e.target===$('sheet')){const rect=$('sheet').getBoundingClientRect();if(e.clientY<rect.top||e.clientY>rect.bottom||e.clientX<rect.left||e.clientX>rect.right)closeSheet()}});$('add-action').onclick=()=>chooseFile(importApps);$('back').onclick=()=>navigate(route().name==='records'?'app/'+encodeURIComponent(route().id):'apps');$('search-action').onclick=async()=>{await navigate('apps');setTimeout(()=>$('view').querySelector('input[type=search]')?.focus(),100)};document.querySelectorAll('[data-tab]').forEach(b=>b.onclick=()=>navigate(b.dataset.tab));window.addEventListener('hashchange',()=>{run(async()=>{await flushAll();render()})});window.addEventListener('beforeunload',e=>{if(pendingForms.size){e.preventDefault();e.returnValue=''}});document.addEventListener('visibilitychange',()=>{if(document.hidden)run(flushAll)});render();reloadManage().then(render);
 </script>
 </body></html>
