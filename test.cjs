@@ -1,9 +1,24 @@
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const vm = require('node:vm');
+const {gzipSync} = require('node:zlib');
+const {packModule} = require('./pack-module.cjs');
 const code = fs.readFileSync('toolbox.js', 'utf8');
 const html = fs.readFileSync('web/toolbox.html', 'utf8');
 new vm.Script(html.match(/<script>([\s\S]*)<\/script>/)[1]);
+const readModuleArchive = vm.runInNewContext(
+  html.slice(html.indexOf('async function readModuleArchive'), html.indexOf('function archiveModuleSheet')) +
+    '\nreadModuleArchive',
+  {DecompressionStream, TextDecoder}
+);
+
+async function verifyArchiveLimits() {
+  await assert.rejects(readModuleArchive(new Blob(['wrong'])), /不支援的/);
+  await assert.rejects(readModuleArchive(new Blob(['TOOLBOX1\ntruncated'])), /無法解壓縮/);
+  const oversized = new Blob(['TOOLBOX1\n', gzipSync(Buffer.alloc(512 * 1024 + 1, 32))]);
+  await assert.rejects(readModuleArchive(oversized), /解壓後超過/);
+}
+
 
 async function verify(qx) {
   const store = new Map();
@@ -85,7 +100,9 @@ async function verify(qx) {
     'tasks.json':JSON.stringify({task:[{config:'30 6 * * * https://example.com/task.js, tag=Example, enabled=false'}]})
   }};
   assert.equal(JSON.parse(await request('/api/modules/import', mixed)).ok, false);
-  const installed = JSON.parse(await request('/api/modules/import', local));
+  const archiveInput = await readModuleArchive(new Blob([packModule(local)]));
+  assert(JSON.parse(await request('/api/modules/preview', archiveInput)).ok);
+  const installed = JSON.parse(await request('/api/modules/import', archiveInput));
   assert.equal(installed.data.apps.find(app => app.id === appId).pages[0].id, 'records');
   store.set('qx_panel_page_' + appId + ':records', JSON.stringify({
     source: 'local', data: [{name:'紀錄測試'}]
@@ -100,4 +117,4 @@ async function verify(qx) {
   assert.match(await request(pageUrl), /找不到模組頁面/);
 }
 
-Promise.all([verify(true),verify(false)]).then(()=>console.log('QX and Surge-style runtime checks passed')).catch(e=>{console.error(e);process.exitCode=1});
+Promise.all([verify(true),verify(false),verifyArchiveLimits()]).then(()=>console.log('QX and Surge-style runtime checks passed')).catch(e=>{console.error(e);process.exitCode=1});

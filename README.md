@@ -22,3 +22,6 @@ Toolbox 是代理 App 的本機腳本設定介面。開啟 `https://toolbox.com/
 
 - 本機模組從「新增應用 → 匯入本機模組」選取模組 JSON、`app.js`，以及它宣告的 `rewrite.conf` 或 `tasks.json`。Toolbox 使用匯入的 `app.js`。從模組設定頁查看並複製原生配置，加入 Quantumult X 現有的對應區段。`cookie.js` 和 `task.js` 由 QX 從 `Scripts/modules/<目錄>/` 執行。
 - HTTPS 訂閱使用 manifest 同目錄的 `app.js` 和原生配置。可從模組設定頁開啟 Quantumult X 確認匯入。
+
+
+本機模組也可選「匯入 .toolbox 壓縮檔」。可用 `node pack-module.cjs <模組 JSON> <輸出.toolbox>` 封裝一般模組 JSON 或內含 `manifest` 與 `localFiles` 的本機匯入 JSON。格式為 UTF-8 標頭 `TOOLBOX1\n` 接單一 gzip JSON，壓縮前後都以 512 KB 為限。

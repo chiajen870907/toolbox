@@ -54,6 +54,52 @@ function textViewer(title,value){const d=openSheet(title),pre=node('pre','code',
 async function copy(text){try{await navigator.clipboard.writeText(text);toast('已複製')}catch(_){const d=openSheet('複製內容'),t=node('textarea');t.value=text;t.readOnly=true;d.append(status('長按內容並選擇「複製」。'),t);t.focus();t.select()}}
 function download(value,name){const url=URL.createObjectURL(new Blob([JSON.stringify(value,null,2)],{type:'application/json'}));const a=node('a');a.href=url;a.download=name;a.click();setTimeout(()=>URL.revokeObjectURL(url),1000)}
 function chooseFile(handler){const i=node('input');i.type='file';i.accept='.toolbox.json,.json,application/json';i.hidden=true;document.body.append(i);i.onchange=async()=>{try{const f=i.files[0];if(!f)return;if(f.size>524288)throw Error('檔案超過 512 KB，請拆分後匯入');await handler(JSON.parse(await f.text()))}catch(e){showError(e instanceof SyntaxError?Error('JSON 格式不正確，請檢查檔案內容'):e)}finally{i.remove()}};i.click()}
+async function readModuleArchive(file) {
+  const limit = 512 * 1024;
+  const magic = 'TOOLBOX1\n';
+  if (file.size > limit) throw Error('模組壓縮檔超過 512 KB');
+  const header = await file.slice(0, magic.length).text();
+  if (header !== magic) throw Error('不支援的 .toolbox 格式或版本');
+  if (typeof DecompressionStream !== 'function') {
+    throw Error('此瀏覽器無法解壓縮，請更新 Safari 或匯入本機模組 JSON');
+  }
+  const stream = file.slice(magic.length).stream().pipeThrough(new DecompressionStream('gzip'));
+  const reader = stream.getReader();
+  const decoder = new TextDecoder('utf-8', {fatal:true});
+  let size = 0;
+  let json = '';
+  try {
+    while (true) {
+      const {value, done} = await reader.read();
+      if (done) break;
+      size += value.byteLength;
+      if (size > limit) {
+        await reader.cancel();
+        throw Error('模組解壓後超過 512 KB');
+      }
+      json += decoder.decode(value, {stream:true});
+    }
+    return JSON.parse(json + decoder.decode());
+  } catch (error) {
+    if (size > limit) throw Error('模組解壓後超過 512 KB');
+    throw Error('無法解壓縮或讀取模組內容');
+  } finally {
+    reader.releaseLock();
+  }
+}
+
+function archiveModuleSheet() {
+  const d = openSheet('匯入 .toolbox 壓縮檔');
+  const label = node('label','stack','選取 .toolbox 檔案');
+  const picker = node('input');
+  picker.type = 'file';
+  label.append(picker);
+  d.append(label, button('預覽匯入', async () => {
+    const file = picker.files[0];
+    if (!file) throw Error('請選取 .toolbox 檔案');
+    await importApps(await readModuleArchive(file));
+  }, 'button primary wide'));
+}
 function localModuleSheet() {
   const d = openSheet('匯入本機模組');
   const label = node('label','stack','選擇模組 JSON 與相關檔案');
@@ -81,7 +127,7 @@ function localModuleSheet() {
     await importApps({manifest, localFiles});
   }, 'button primary wide'));
 }
-function addSheet(){const d=openSheet('新增應用');d.append(button('匯入 JSON 檔',()=>{closeSheet();chooseFile(importApps)},'sheet-action'),button('匯入本機模組',localModuleSheet,'sheet-action'),button('貼上內容',pasteSheet,'sheet-action'),button('新增訂閱 URL',subscriptionSheet,'sheet-action'))}
+function addSheet(){const d=openSheet('新增應用');d.append(button('匯入 JSON 檔',()=>{closeSheet();chooseFile(importApps)},'sheet-action'),button('匯入 .toolbox 壓縮檔',archiveModuleSheet,'sheet-action'),button('匯入本機模組',localModuleSheet,'sheet-action'),button('貼上內容',pasteSheet,'sheet-action'),button('新增訂閱 URL',subscriptionSheet,'sheet-action'))}
 function pasteSheet(){const d=openSheet('貼上設定內容'),t=node('textarea');t.rows=10;t.placeholder='貼上 toolbox.json 設定內容';t.setAttribute('aria-label','設定 JSON');d.append(t,button('預覽匯入',async()=>{let value;try{value=JSON.parse(t.value)}catch(_){throw Error('JSON 格式不正確，請檢查括號與逗號')}await importApps(value)},'button primary wide'))}
 async function importApps(input){await flushAll();const preview=await api('modules/preview',input);const d=openSheet('匯入預覽');d.append(status('匯入後保留已有設定。'));for(const a of preview)d.append(node('p','preview-row',previewAppLabel(a)+' · '+(a.replacing?'更新':'新增')));d.append(button('確認匯入',async()=>{state=await api('modules/import',input);if(manage.available)await api('manage/metadata',{input});await reloadManage();closeSheet();await navigate('apps');render();toast('已匯入')},'button primary wide'))}
 function subscriptionSheet(){const d=openSheet('新增訂閱'),label=node('label','stack','訂閱 URL'),input=node('input');input.type='url';input.placeholder='https://raw.githubusercontent.com/…/apps.toolbox.json';input.autocapitalize='none';label.append(input);d.append(label,status('支援 GitHub Raw 或 jsDelivr 的 HTTPS JSON 連結。'));const submit=button('載入並預覽',async()=>{const result=await api('subscriptions/preview',{url:input.value.trim()});const box=openSheet('訂閱預覽');box.append(node('p','',result.name),node('p','muted',result.url));for(const app of result.apps)box.append(node('p','preview-row',previewAppLabel(app)));box.append(button('加入訂閱',async()=>{await api('subscriptions/add',{url:result.url,revision:result.revision});await refresh();closeSheet();await navigate('apps');render();toast('已加入訂閱')},'button primary wide'))},'button primary wide');d.append(submit)}
@@ -171,7 +217,7 @@ function editData(row){const d=openSheet('編輯資料');d.append(node('code',''
 function diffRows(d,changes){if(!changes.length)d.append(status('沒有需要變更的資料。'));for(const change of changes){const row=node('div','diff-row');row.append(node('code','',change.key),node('small','muted','目前：'+(change.before??'未儲存')),node('small','','變更後：'+(change.after??'刪除')));d.append(row)}}
 async function previewRestore(input){const preview=await manager('backup/preview',{input});const d=openSheet('還原差異');d.append(status('僅套用下列資料，不刪除其他 key。'));diffRows(d,preview.changes);if(preview.skipped?.length)d.append(status('略過 '+preview.skipped.length+' 個敏感或不支援的 key。'));d.append(button('套用還原',async()=>{if(!confirm('套用以上 '+preview.changes.length+' 筆變更？'))return;if(!confirm('確認還原？目前值將被取代。'))return;await manager('backup/apply',{input,revision:preview.revision});await refresh();closeSheet();render();toast('還原完成')},'button primary wide'))}
 async function previewSession(session){const preview=await manager('sessions/preview',{id:session.id});const d=openSheet('切換會話：'+session.name);diffRows(d,preview.changes);d.append(button('套用會話',async()=>{if(!confirm('套用此會話？'))return;if(!confirm('確認取代目前應用設定？登入憑證會保留。'))return;await manager('sessions/apply',{id:session.id,revision:preview.revision});await refresh();closeSheet();render();toast('已切換會話')},'button primary wide'))}
-function settingsPage(view){const preferences=card('偏好設定');const theme=node('select');theme.setAttribute('aria-label','主題');for(const [value,label] of [['system','跟隨系統'],['light','淺色'],['dark','深色']]){const op=node('option','',label);op.value=value;op.selected=manage.preferences.theme===value;theme.append(op)}theme.onchange=()=>run(async()=>{await savePreference({theme:theme.value});toast('已儲存')});preferences.append(node('label','field-label','主題'),theme);const language=node('select');language.setAttribute('aria-label','語言');language.append(node('option','','繁體中文'));preferences.append(node('label','field-label','語言'),language,node('p','muted','目前提供繁體中文。'));const debug=node('input');debug.type='checkbox';debug.checked=manage.preferences.debug;debug.onchange=()=>run(async()=>{await savePreference({debug:debug.checked});toast('已儲存')});const l=node('label','choice');l.append(debug,node('span','','除錯模式'));preferences.append(l,node('p','muted','顯示管理操作的錯誤詳情，不記錄登入憑證。'));if(!manage.available){theme.disabled=true;debug.disabled=true;preferences.append(status('偏好儲存介面尚未啟用。','error'))}view.append(preferences);const about=card('關於');about.append(node('p','','Toolbox · 2.1.0'),node('p','muted','介面參考 BoxJS 使用流程。使用原生 HTML、CSS 與 JavaScript，無外部依賴。'),node('p','muted','授權：尚未指定；未附帶第三方原始碼。'));const a=node('a','button wide','BoxJS 配置文件');a.href='https://docs.boxjs.app/dev/configure';a.target='_blank';a.rel='noopener noreferrer';about.append(a,button('功能與儲存限制',()=>info('功能限制','QX 無法列舉所有 key；資料頁與備份限於已知 key。登入憑證預設遮蔽，不參與備份或會話。控制台不直接啟動 Task。主題跟隨系統或手動設定。')));view.append(about)}
+function settingsPage(view){const preferences=card('偏好設定');const theme=node('select');theme.setAttribute('aria-label','主題');for(const [value,label] of [['system','跟隨系統'],['light','淺色'],['dark','深色']]){const op=node('option','',label);op.value=value;op.selected=manage.preferences.theme===value;theme.append(op)}theme.onchange=()=>run(async()=>{await savePreference({theme:theme.value});toast('已儲存')});preferences.append(node('label','field-label','主題'),theme);const language=node('select');language.setAttribute('aria-label','語言');language.append(node('option','','繁體中文'));preferences.append(node('label','field-label','語言'),language,node('p','muted','目前提供繁體中文。'));const debug=node('input');debug.type='checkbox';debug.checked=manage.preferences.debug;debug.onchange=()=>run(async()=>{await savePreference({debug:debug.checked});toast('已儲存')});const l=node('label','choice');l.append(debug,node('span','','除錯模式'));preferences.append(l,node('p','muted','顯示管理操作的錯誤詳情，不記錄登入憑證。'));if(!manage.available){theme.disabled=true;debug.disabled=true;preferences.append(status('偏好儲存介面尚未啟用。','error'))}view.append(preferences);const about=card('關於');about.append(node('p','','Toolbox · 2.2.0'),node('p','muted','介面參考 BoxJS 使用流程。使用原生 HTML、CSS 與 JavaScript，無外部依賴。'),node('p','muted','授權：尚未指定；未附帶第三方原始碼。'));const a=node('a','button wide','BoxJS 配置文件');a.href='https://docs.boxjs.app/dev/configure';a.target='_blank';a.rel='noopener noreferrer';about.append(a,button('功能與儲存限制',()=>info('功能限制','QX 無法列舉所有 key；資料頁與備份限於已知 key。登入憑證預設遮蔽，不參與備份或會話。控制台不直接啟動 Task。主題跟隨系統或手動設定。')));view.append(about)}
 async function reloadManage(){try{manage=await api('manage/state',{});manage.available=true}catch(_){manage.available=false}applyTheme()}
 async function refresh(){state=await api('state');await reloadManage()}
 function render(){activeForm=null;const view=$('view');view.replaceChildren();routeVersion++;const r=route(),detail=['app','records'].includes(r.name),tab=detail?'apps':r.name;document.querySelectorAll('[data-tab]').forEach(b=>{const on=b.dataset.tab===tab;b.classList.toggle('active',on);b.setAttribute('aria-current',on?'page':'false')});$('page-title').textContent=({home:'Toolbox',apps:'應用',data:'資料',settings:'設定',app:'應用設定',records:'應用設定'})[r.name]||'首頁';$('back').hidden=!detail;$('search-action').hidden=detail||['data','settings'].includes(r.name);$('add-action').hidden=['data','settings'].includes(r.name);if(r.name==='app'||r.name==='records'){const app=availableApps().find(a=>a.id===r.id);if(!app){view.append(empty('找不到應用','請回到應用列表重新開啟。',false));return}run(()=>appPage(view,app));return}if(r.name==='apps')appsPage(view);else if(r.name==='data')dataPage(view);else if(r.name==='settings')settingsPage(view);else home(view);window.scrollTo(0,0)}
