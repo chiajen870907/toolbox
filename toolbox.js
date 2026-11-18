@@ -62,7 +62,7 @@
     return v;
   }
   function normalizeCondition(c,ids,depth=0){if(!c)return null;if(depth>4||typeof c!=='object'||Array.isArray(c))throw Error('欄位聯動設定不正確。');if(Array.isArray(c.all)){if(c.all.length>10)throw Error('欄位聯動設定過多。');return {all:c.all.map(x=>normalizeCondition(x,ids,depth+1))}}if(!ids.includes(c.id)||!['boolean','number','string'].includes(typeof c.value))throw Error('欄位聯動設定不正確。');return {id:c.id,value:c.value}}
-  function normalizeApp(raw,packageId,packageName,source){
+  function normalizeApp(raw,packageId,packageName,source,local){
     if(!raw||typeof raw.id!=='string'||!/^[a-zA-Z0-9_.-]{1,100}$/.test(raw.id)||!raw.name||!Array.isArray(raw.settings)||raw.settings.length>100)throw Error('工具設定需要 id、name 與 settings。');
     const ids=raw.settings.map(f=>f.id);if(new Set(ids).size!==ids.length)throw Error('工具內有重複欄位。');
     const settings=raw.settings.map(f=>{
@@ -84,21 +84,64 @@
       new Set(pages.map(page => page.id)).size !== pages.length) throw Error('模組頁面宣告格式不正確。');
     const cookie = raw.cookie === true;
     const task = raw.task === true;
-    const manifestUrl = source || raw.source;
-    if ((pages.length || cookie || task) && !isManifestUrl(manifestUrl)) {
-      throw Error('含腳本的模組須有 GitHub Raw 或 jsDelivr 的 HTTPS 來源。');
+    const manifestUrl = source;
+    if ((pages.length || cookie || task) && !local && !isManifestUrl(manifestUrl)) {
+      throw Error('含腳本的模組請選擇本機模組檔案，或使用 HTTPS 訂閱。');
     }
     return {id:raw.id,name:text(raw.name,100),description:text(raw.description||raw.desc,800),
       packageId:text(packageId,100),packageName:text(packageName,100),settings,
       pages:pages.map(page => ({id:page.id,name:text(page.name,100)})),cookie,task,
       source:isManifestUrl(manifestUrl) ? manifestUrl : undefined};
   }
-  function normalize(input, source){
+  function normalize(input, source, local){
     if(!input||typeof input!=='object'||Array.isArray(input))throw Error('請選擇工具的 JSON 設定檔。');
     const apps=Array.isArray(input.apps)?input.apps:[input];
     if(!apps.length||apps.length>20)throw Error('一次可匯入 1 到 20 個工具。');
-    const out=apps.map(a=>normalizeApp(a,input.id||a.id,input.name||a.name,source));
+    const out=apps.map(a=>normalizeApp(a,input.id||a.id,input.name||a.name,source,local));
     if(new Set(out.map(a=>a.id)).size!==out.length)throw Error('檔案內有重複工具。');return out;
+  }
+  function normalizeImport(input) {
+    if (!input?.localFiles) return normalize(input);
+    const {manifest, localFiles} = input;
+    if (!localFiles || typeof localFiles !== 'object' || Array.isArray(localFiles)) {
+      throw Error('本機模組檔案格式不正確。');
+    }
+    const apps = normalize(manifest, undefined, true);
+    if (apps.length !== 1) throw Error('一次只能匯入一個含腳本的本機模組。');
+    const app = apps[0];
+    const resources = {mode: 'local'};
+    if (app.pages.length) {
+      const script = localFiles['app.js'];
+      if (typeof script !== 'string' || !script.trim() || script.length > 131072) {
+        throw Error('請選擇不超過 128 KB 的 app.js。');
+      }
+      resources.script = script;
+    }
+    if (app.cookie) {
+      const rewrite = localFiles['rewrite.conf'];
+      const lines = typeof rewrite === 'string' && rewrite.length <= 16384
+        ? rewrite.split(/\r?\n/).map(line => line.trim()).filter(Boolean) : [];
+      const rule = /^\^\S+\s+url\s+script-request-header\s+modules\/[a-zA-Z0-9_-]+\/cookie\.js$/;
+      const hostname = /^hostname\s*=\s*[a-zA-Z0-9.-]+$/;
+      if (lines.length !== 2 || !lines.some(line => rule.test(line)) ||
+          !lines.some(line => hostname.test(line))) {
+        throw Error('本機 rewrite.conf 須指定登入主機和本機 cookie.js。');
+      }
+      resources.rewrite = lines.join('\n');
+    }
+    if (app.task) {
+      const gallery = localFiles['tasks.json'];
+      let config;
+      try {
+        if (typeof gallery === 'string' && gallery.length <= 16384) config = JSON.parse(gallery).task[0].config;
+      } catch (_) {}
+      if (typeof config !== 'string' ||
+          !/^(?:[0-9*,/-]+ ){5}modules\/[a-zA-Z0-9_-]+\/task\.js, tag=[^,\r\n=]+, enabled=(?:true|false)$/.test(config)) {
+        throw Error('本機 tasks.json 須指定排程和本機 task.js。');
+      }
+      resources.taskConfig = config;
+    }
+    return [{...app, resources}];
   }
   function registry() {
     const stored = read(REG, []);
@@ -205,7 +248,16 @@
     for(const f of app.settings){if(f.readonly||!own(input,f.id)||(!includeSecrets&&secret(f)))continue;const v=validateValue(f,input[f.id]);next[f.id]=v;const parts=keyParts(f.id);if(parts.length===1){changes.set(parts[0],typeof v==='object'?JSON.stringify(v):String(v));continue}let root;try{root=JSON.parse(changes.has(parts[0])?changes.get(parts[0]):storage.valueForKey(parts[0])||'{}')}catch(_){root={}}if(!root||typeof root!=='object'||Array.isArray(root))root={};let target=root;for(const part of parts.slice(1,-1)){if(!own(target,part)||!target[part]||typeof target[part]!=='object'||Array.isArray(target[part]))target[part]={};target=target[part]}target[parts[parts.length-1]]=v;changes.set(parts[0],JSON.stringify(root))}
     return [...changes];
   }
-  function publicApp(app){const current=values(app);return {...app,settings:app.settings.map(f=>({...f,value:secret(f)?'':current[f.id],sensitive:secret(f),hasSavedValue:secret(f)&&!!preference(f.id)}))}}
+  function publicApp(app) {
+    const current = values(app);
+    const {resources, ...publicFields} = app;
+    const settings = app.settings.map(f => ({
+      ...f, value:secret(f)?'':current[f.id], sensitive:secret(f), hasSavedValue:secret(f)&&!!preference(f.id)
+    }));
+    const local = resources?.mode === 'local'
+      ? {rewrite:resources.rewrite, taskConfig:resources.taskConfig} : undefined;
+    return {...publicFields, local, settings};
+  }
   function state() {
     const current = registry();
     const disabled = current.subscriptions.filter(sub => !sub.enabled).flatMap(sub => sub.appIds);
@@ -223,26 +275,31 @@
     const current = registry();
     const app = current.apps.find(item => item.id === appId);
     const page = app?.pages?.find(item => item.id === pageId);
-    if (!page || !isManifestUrl(app.source) ||
+    if (!page || (app.resources?.mode !== 'local' && !isManifestUrl(app.source)) ||
         current.subscriptions.some(sub => !sub.enabled && sub.appIds.includes(appId))) {
       return reply('找不到模組頁面。', 'text/plain; charset=utf-8', 'HTTP/1.1 404 Not Found');
     }
-    const resource = await fetchResource(moduleAsset(app, 'app.js'));
-    if (Number(resource.statusCode) !== 200 || typeof resource.body !== 'string' ||
-        resource.body.length > 131072) throw Error('無法載入模組頁面。');
+    let script = app.resources?.script;
+    if (app.resources?.mode !== 'local') {
+      const resource = await fetchResource(moduleAsset(app, 'app.js'));
+      if (Number(resource.statusCode) !== 200) throw Error('無法載入模組頁面。');
+      script = resource.body;
+    }
+    if (typeof script !== 'string' || script.length > 131072) throw Error('無法載入模組頁面。');
     const latest = registry();
     if (latest.subscriptions.some(sub => !sub.enabled && sub.appIds.includes(appId)) ||
-        !latest.apps.some(item => item.id === appId && item.source === app.source &&
+        !latest.apps.some(item => item.id === appId && item.source === app.source && item.resources?.script === app.resources?.script &&
           item.pages?.some(entry => entry.id === pageId))) {
       return reply('找不到模組頁面。', 'text/plain; charset=utf-8', 'HTTP/1.1 404 Not Found');
     }
     const published = read('qx_panel_page_' + appId + ':' + pageId, null);
-    const data = published?.source === app.source ? published.data : null;
+    const source = app.resources?.mode === 'local' ? 'local' : app.source;
+    const data = published?.source === source ? published.data : null;
     const frame = '<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">' +
       '<meta http-equiv="Content-Security-Policy" content="default-src &#39;none&#39;; script-src &#39;unsafe-inline&#39;; style-src &#39;unsafe-inline&#39;; img-src data:; base-uri &#39;none&#39;; form-action &#39;none&#39;">' +
       '<style>:root{color-scheme:light dark}body{font:16px system-ui;margin:0}main{max-width:44rem;margin:auto;padding:1rem}input{font:inherit;padding:.5rem;width:min(100%,20rem)}article{border-bottom:1px solid #8886;padding:1rem 0;display:flow-root}h2{font-size:1.1rem;margin:0}img{width:5rem;height:5rem;object-fit:cover;float:left;margin-right:.8rem;border-radius:.5rem}</style>' +
       '<main></main><script>window.toolboxData=' + safeJson(data) +
-      ';const entry=document.createElement("script");entry.textContent=' + safeJson(resource.body) +
+      ';const entry=document.createElement("script");entry.textContent=' + safeJson(script) +
       ';document.body.append(entry);</script>';
     const title = escapeHtml(page.name);
     const html = '<!doctype html><html lang="zh-Hant"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">' +
@@ -264,13 +321,13 @@
     if(method==='GET'&&path==='/api/state')return ok(state());
     if(method==='POST'&&path.startsWith('/api/')){
       const headers={};for(const k of Object.keys($request.headers||{}))headers[k.toLowerCase()]=$request.headers[k];if(headers['x-panel-token']!==token||(headers.origin&&headers.origin!==origin)||!/^application\/json\b/i.test(headers['content-type']||''))throw Error('頁面已過期，請重新整理。');if(typeof $request.body!=='string'||$request.body.length>524288)throw Error('檔案內容太大或格式不正確。');let input;try{input=JSON.parse($request.body)}catch(_){throw Error('請選擇有效的 JSON 檔案。')}
-      if(path==='/api/modules/preview')return ok(normalize(input).map(a=>({id:a.id,name:a.name,fields:a.settings.length,pages:a.pages,cookie:a.cookie,task:a.task,replacing:modules().some(x=>x.id===a.id)})));
+      if(path==='/api/modules/preview')return ok(normalizeImport(input).map(a=>({id:a.id,name:a.name,fields:a.settings.length,pages:a.pages,cookie:a.cookie,task:a.task,replacing:modules().some(x=>x.id===a.id)})));
       if (path.startsWith('/api/subscriptions/')) {
         return ok(await subscriptionAction(path.slice('/api/subscriptions/'.length), input));
       }
       if (path === '/api/modules/import') {
         const current = registry();
-        const imported = normalize(input);
+        const imported = normalizeImport(input);
         const owned = current.subscriptions.flatMap(sub => sub.appIds);
         if (imported.some(app => owned.includes(app.id))) throw Error('請從訂閱來源更新這個應用。');
         saveRegistry({...current, apps: mergeApps(current.apps, imported)});

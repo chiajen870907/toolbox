@@ -54,7 +54,34 @@ function textViewer(title,value){const d=openSheet(title),pre=node('pre','code',
 async function copy(text){try{await navigator.clipboard.writeText(text);toast('已複製')}catch(_){const d=openSheet('複製內容'),t=node('textarea');t.value=text;t.readOnly=true;d.append(status('長按內容並選擇「複製」。'),t);t.focus();t.select()}}
 function download(value,name){const url=URL.createObjectURL(new Blob([JSON.stringify(value,null,2)],{type:'application/json'}));const a=node('a');a.href=url;a.download=name;a.click();setTimeout(()=>URL.revokeObjectURL(url),1000)}
 function chooseFile(handler){const i=node('input');i.type='file';i.accept='.toolbox.json,.json,application/json';i.hidden=true;document.body.append(i);i.onchange=async()=>{try{const f=i.files[0];if(!f)return;if(f.size>524288)throw Error('檔案超過 512 KB，請拆分後匯入');await handler(JSON.parse(await f.text()))}catch(e){showError(e instanceof SyntaxError?Error('JSON 格式不正確，請檢查檔案內容'):e)}finally{i.remove()}};i.click()}
-function addSheet(){const d=openSheet('新增應用');d.append(button('匯入 JSON 檔',()=>{closeSheet();chooseFile(importApps)},'sheet-action'),button('貼上內容',pasteSheet,'sheet-action'),button('新增訂閱 URL',subscriptionSheet,'sheet-action'))}
+function localModuleSheet() {
+  const d = openSheet('匯入本機模組');
+  const label = node('label','stack','選擇模組 JSON 與相關檔案');
+  const picker = node('input');
+  picker.type = 'file';
+  picker.multiple = true;
+  picker.accept = '.json,.js,.conf';
+  label.append(picker);
+  d.append(label, status('有頁面時選 app.js，有登入或任務時加選 rewrite.conf 或 tasks.json。原生腳本由 QX 從 Scripts 資料夾讀取。'));
+  d.append(button('預覽匯入', async () => {
+    const files = [...picker.files];
+    const manifests = files.filter(file => /\.json$/i.test(file.name) && file.name !== 'tasks.json');
+    if (manifests.length !== 1) throw Error('請選擇一份模組 JSON');
+    const limits = {'app.js':131072,'rewrite.conf':16384,'tasks.json':16384};
+    const localFiles = {};
+    for (const file of files) {
+      if (!Object.prototype.hasOwnProperty.call(limits, file.name)) continue;
+      if (file.size > limits[file.name] || file.name in localFiles) throw Error(file.name+' 檔案太大或重複');
+      localFiles[file.name] = await file.text();
+    }
+    if (manifests[0].size > 131072) throw Error('模組 JSON 超過 128 KB');
+    let manifest;
+    try { manifest = JSON.parse(await manifests[0].text()); }
+    catch (_) { throw Error('模組 JSON 格式不正確'); }
+    await importApps({manifest, localFiles});
+  }, 'button primary wide'));
+}
+function addSheet(){const d=openSheet('新增應用');d.append(button('匯入 JSON 檔',()=>{closeSheet();chooseFile(importApps)},'sheet-action'),button('匯入本機模組',localModuleSheet,'sheet-action'),button('貼上內容',pasteSheet,'sheet-action'),button('新增訂閱 URL',subscriptionSheet,'sheet-action'))}
 function pasteSheet(){const d=openSheet('貼上設定內容'),t=node('textarea');t.rows=10;t.placeholder='貼上 toolbox.json 設定內容';t.setAttribute('aria-label','設定 JSON');d.append(t,button('預覽匯入',async()=>{let value;try{value=JSON.parse(t.value)}catch(_){throw Error('JSON 格式不正確，請檢查括號與逗號')}await importApps(value)},'button primary wide'))}
 async function importApps(input){await flushAll();const preview=await api('modules/preview',input);const d=openSheet('匯入預覽');d.append(status('匯入後保留已有設定。'));for(const a of preview)d.append(node('p','preview-row',previewAppLabel(a)+' · '+(a.replacing?'更新':'新增')));d.append(button('確認匯入',async()=>{state=await api('modules/import',input);if(manage.available)await api('manage/metadata',{input});await reloadManage();closeSheet();await navigate('apps');render();toast('已匯入')},'button primary wide'))}
 function subscriptionSheet(){const d=openSheet('新增訂閱'),label=node('label','stack','訂閱 URL'),input=node('input');input.type='url';input.placeholder='https://raw.githubusercontent.com/…/apps.toolbox.json';input.autocapitalize='none';label.append(input);d.append(label,status('支援 GitHub Raw 或 jsDelivr 的 HTTPS JSON 連結。'));const submit=button('載入並預覽',async()=>{const result=await api('subscriptions/preview',{url:input.value.trim()});const box=openSheet('訂閱預覽');box.append(node('p','',result.name),node('p','muted',result.url));for(const app of result.apps)box.append(node('p','preview-row',previewAppLabel(app)));box.append(button('加入訂閱',async()=>{await api('subscriptions/add',{url:result.url,revision:result.revision});await refresh();closeSheet();await navigate('apps');render();toast('已加入訂閱')},'button primary wide'))},'button primary wide');d.append(submit)}
@@ -94,6 +121,24 @@ function appResources(app) {
   };
   for (const page of app.pages || []) {
     link(page.name, '/app/' + encodeURIComponent(app.id) + '/' + encodeURIComponent(page.id));
+  }
+  if (app.local && (app.cookie || app.task)) {
+    if (BOOT.platform === 'qx') {
+      if (app.local.rewrite) {
+        const lines = app.local.rewrite.split('\n');
+        const hostname = lines.find(line => line.startsWith('hostname'));
+        const rule = lines.find(line => line.startsWith('^'));
+        resources.append(button('查看本機登入 Rewrite', () => textViewer('加入 QX 對應區段',
+          '[rewrite_local]\n'+rule+'\n\n[mitm]\n'+hostname)));
+      }
+      if (app.local.taskConfig) {
+        resources.append(button('查看本機 Task 配置', () => textViewer('加入 QX 的 [task_local]',
+          app.local.taskConfig)));
+      }
+      resources.append(node('p','muted','請將配置加入 QX 的現有區段。MITM 主機請合併到既有清單。安裝狀態未確認。'));
+    } else {
+      resources.append(node('p','muted','這個模組的登入與任務目前使用 Quantumult X 配置。'));
+    }
   }
   if (app.source && (app.cookie || app.task)) {
     if (BOOT.platform === 'qx') {

@@ -65,11 +65,31 @@ async function verify(qx) {
   const appId = pageManifest.id;
   const pageUrl = '/app/' + appId + '/records';
   assert.match(await request(pageUrl), /找不到模組頁面/);
-  const installed = JSON.parse(await request('/api/modules/import', pageManifest));
+  manifest = pageManifest;
+  const remote = await api('preview', {url});
+  assert((await api('add', {url, revision:remote.data.revision})).ok);
+  assert.match(await request(pageUrl), /sandbox="allow-scripts"/);
+  assert((await api('remove', {id:url})).ok);
+  assert.equal(JSON.parse(await request('/api/modules/import', pageManifest)).ok, false);
+
+  const local = {
+    manifest: {...pageManifest, cookie:true, task:true},
+    localFiles: {
+      'app.js':appScript,
+      'rewrite.conf':String.raw`^https:\/\/example\.com/ url script-request-header modules/example/cookie.js` + '\nhostname = example.com',
+      'tasks.json':JSON.stringify({task:[{config:'30 6 * * * modules/example/task.js, tag=Example, enabled=false'}]})
+    }
+  };
+  const mixed = {...local, localFiles:{...local.localFiles,
+    'tasks.json':JSON.stringify({task:[{config:'30 6 * * * https://example.com/task.js, tag=Example, enabled=false'}]})
+  }};
+  assert.equal(JSON.parse(await request('/api/modules/import', mixed)).ok, false);
+  const installed = JSON.parse(await request('/api/modules/import', local));
   assert.equal(installed.data.apps.find(app => app.id === appId).pages[0].id, 'records');
   store.set('qx_panel_page_' + appId + ':records', JSON.stringify({
-    source: pageManifest.source, data: [{name:'紀錄測試'}]
+    source: 'local', data: [{name:'紀錄測試'}]
   }));
+  offline = true;
   const modulePage = await request(pageUrl);
   assert.match(modulePage, /sandbox="allow-scripts"/);
   assert.match(modulePage, /紀錄測試/);

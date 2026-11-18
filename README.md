@@ -18,4 +18,7 @@ Toolbox 是代理 App 的本機腳本設定介面。開啟 `https://toolbox.com/
 
 ## 模組頁面與 Quantumult X 安裝
 
-含自訂頁面的模組會在設定頁顯示頁面連結。Toolbox 經由同一條 Rewrite 載入模組來源旁的 `app.js`。宣告登入 Rewrite 或 Task 的模組，可以從設定頁開啟 Quantumult X 確認匯入。Task 配置可指向 `Scripts` 底下的本機腳本。
+含自訂頁面的模組會在設定頁顯示頁面連結，並經由同一條 Toolbox Rewrite 開啟。
+
+- 本機模組從「新增應用 → 匯入本機模組」選取模組 JSON、`app.js`，以及它宣告的 `rewrite.conf` 或 `tasks.json`。Toolbox 使用匯入的 `app.js`。從模組設定頁查看並複製原生配置，加入 Quantumult X 現有的對應區段。`cookie.js` 和 `task.js` 由 QX 從 `Scripts/modules/<目錄>/` 執行。
+- HTTPS 訂閱使用 manifest 同目錄的 `app.js` 和原生配置。可從模組設定頁開啟 Quantumult X 確認匯入。

@@ -33,8 +33,8 @@ JSON 宣告穩定的模組 ID、名稱、版本、設定欄位、額外頁面、
 
 ## 來源與更新
 
-- 本機可選單一 JSON 匯入表單，帶有程式檔的模組用 ZIP 匯入。同目錄檔案不會由 Safari 自動取得。
-- 遠端訂閱目前接受 GitHub Raw 或 jsDelivr 的 HTTPS JSON 連結，由 Toolbox 的平台轉接層下載。以 manifest URL 所在的目錄解析 `app.js`、`rewrite.conf` 和 `tasks.json`。本機 JSON 可用 `source` 指定遠端 manifest URL。
+- 本機可選單一 JSON 匯入表單。含程式檔的模組，在檔案選擇器一次選取 JSON、app.js 及宣告的原生配置；同目錄檔案需要手動選取。
+- 遠端訂閱目前接受 GitHub Raw 或 jsDelivr 的 HTTPS JSON 連結，由 Toolbox 的平台轉接層下載。以 manifest URL 所在的目錄解析 `app.js`、`rewrite.conf` 和 `tasks.json`。本機模組資源使用選取的檔案，原生配置使用 QX Scripts 相對路徑。
 - 匯入前預覽模組 ID、版本、頁面、任務與登入網域。確認後登錄模組和來源。刷新遠端模組時，驗證新版本成功後才替換目前版本。
 - 用相同 ID 更新模組時保留設定。ZIP 只接受預期的模組檔案及有界的大小，拒絕跨目錄路徑和重複檔名。
 - 本機 ZIP 的頁面資源由 Toolbox 登錄。原生 Task／Rewrite 是否能使用本地腳本，取決於代理 App 的檔案位置與匯入能力；若無法代裝，顯示配置與所需檔案。
@@ -43,7 +43,7 @@ JSON 宣告穩定的模組 ID、名稱、版本、設定欄位、額外頁面、
 
 Toolbox 的一條 Rewrite 處理控制台、設定 API 和訂閱 API。同一條 Rewrite 也提供 `/app/<模組 ID>/<頁面 ID>`。路由只接受已登錄且啟用的模組及其宣告的頁面。同一模組的多個頁面共用 app.js。新增頁面不必加 Rewrite。
 
-app.js 在隔離的瀏覽器 iframe 執行。原生腳本將頁面資料發布到 `qx_panel_page_<模組 ID>:<頁面 ID>`，資料格式為 `{source,data}`。Toolbox 比對來源後把 `data` 傳給 `window.toolboxData`。插件頁面須有隔離及模組權限限制，不能直接讀取其他模組資料或代理環境憑證。紀錄和圖片等需要代理端參與時，先定義通用資料契約，供模組產出自己命名空間中的資料。
+app.js 在隔離的瀏覽器 iframe 執行。原生腳本將頁面資料發布到 `qx_panel_page_<模組 ID>:<頁面 ID>`，資料格式為 `{source,data}`。遠端模組以 manifest URL 比對來源；本機模組的 `source` 為 `local`。Toolbox 比對來源後把 `data` 傳給 `window.toolboxData`。插件頁面須有隔離及模組權限限制，不能直接讀取其他模組資料或代理環境憑證。紀錄和圖片等需要代理端參與時，先定義通用資料契約，供模組產出自己命名空間中的資料。
 
 平台轉接層統一儲存、HTTP、通知和回應介面。cookie.js 和 task.js 使用同一套模組介面，由各平台的原生配置註冊。模組停用時，已安裝的腳本須檢查模組狀態並跳過執行；此開關不能代替代理 App 移除原生規則。UI 要區分「未安裝」「已安裝」與「狀態未確認」。
 
